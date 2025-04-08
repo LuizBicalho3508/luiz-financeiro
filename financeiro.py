@@ -2,6 +2,8 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import smtplib
+from email.message import EmailMessage
 
 st.set_page_config(page_title="Controle Financeiro", layout="wide")
 
@@ -36,6 +38,22 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS receitas (
     FOREIGN KEY(user_id) REFERENCES usuarios(id)
 )''')
 conn.commit()
+
+# Função para enviar email (substituir email e senha pelos seus dados ou usar um servidor configurado)
+def enviar_alerta_email(destinatario, assunto, mensagem):
+    try:
+        msg = EmailMessage()
+        msg.set_content(mensagem)
+        msg["Subject"] = assunto
+        msg["From"] = "seuemail@example.com"
+        msg["To"] = destinatario
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login("seuemail@example.com", "suasenha")
+            server.send_message(msg)
+    except:
+        pass  # Para evitar quebra se envio falhar
 
 # Autenticação
 if "user_id" not in st.session_state:
@@ -73,116 +91,8 @@ else:
 
     aba = st.sidebar.radio("Menu", ["Dashboard", "Despesas", "Receitas", "Histórico de Receitas"])
 
-    # ==================== RECEITAS ====================
-    if aba == "Receitas":
-        st.title("Receitas")
-
-        with st.expander("➕ Adicionar Receita"):
-            with st.form("form_receita"):
-                data_receita = st.date_input("Data da Receita", value=pd.Timestamp.now())
-                categoria = st.text_input("Categoria", placeholder="ex: Salário, Venda, Extra")
-                valor_receita = st.number_input("Valor", min_value=0.0, step=0.01)
-                submitted = st.form_submit_button("Salvar Receita")
-                if submitted:
-                    cursor.execute("INSERT INTO receitas (user_id, data, categoria, valor) VALUES (?, ?, ?, ?)",
-                                   (user_id, str(data_receita), categoria, valor_receita))
-                    conn.commit()
-                    st.success("Receita adicionada com sucesso!")
-                    st.rerun()
-
-        df_receitas = pd.read_sql_query("SELECT id, data, categoria, valor FROM receitas WHERE user_id = ? ORDER BY data DESC", conn, params=(user_id,))
-        if not df_receitas.empty:
-            df_receitas['data'] = pd.to_datetime(df_receitas['data']).dt.strftime('%d/%m/%Y')
-            st.dataframe(df_receitas[['data', 'categoria', 'valor']], use_container_width=True)
-
-            with st.expander("✏️ Editar ou Excluir Receita"):
-                receita_id = st.selectbox("Selecione a Receita", df_receitas['id'])
-                receita_selecionada = df_receitas[df_receitas['id'] == receita_id].iloc[0]
-                nova_data = st.date_input("Nova Data", pd.to_datetime(receita_selecionada['data'], dayfirst=True))
-                nova_categoria = st.text_input("Nova Categoria", receita_selecionada['categoria'])
-                novo_valor = st.number_input("Novo Valor", value=float(receita_selecionada['valor']), step=0.01)
-
-                if st.button("Atualizar Receita"):
-                    cursor.execute("UPDATE receitas SET data = ?, categoria = ?, valor = ? WHERE id = ?",
-                                   (str(nova_data), nova_categoria, novo_valor, receita_id))
-                    conn.commit()
-                    st.success("Receita atualizada!")
-                    st.rerun()
-
-                if st.button("Excluir Receita"):
-                    cursor.execute("DELETE FROM receitas WHERE id = ?", (receita_id,))
-                    conn.commit()
-                    st.warning("Receita excluída.")
-                    st.rerun()
-        else:
-            st.info("Nenhuma receita cadastrada ainda.")
-
-    # ==================== HISTÓRICO ====================
-    elif aba == "Histórico de Receitas":
-        st.title("📖 Histórico de Receitas")
-        df_hist = pd.read_sql_query("SELECT * FROM receitas WHERE user_id = ? ORDER BY data DESC", conn, params=(user_id,))
-        if not df_hist.empty:
-            df_hist['data'] = pd.to_datetime(df_hist['data'])
-            filtro_categoria = st.multiselect("Filtrar por categoria", df_hist['categoria'].unique())
-            filtro_data = st.date_input("Filtrar por data", [])
-
-            if filtro_categoria:
-                df_hist = df_hist[df_hist['categoria'].isin(filtro_categoria)]
-            if filtro_data:
-                df_hist = df_hist[df_hist['data'].isin(pd.to_datetime(filtro_data))]
-
-            st.dataframe(df_hist[['data', 'categoria', 'valor']], use_container_width=True)
-        else:
-            st.info("Nenhuma receita registrada.")
-
-    # ==================== DESPESAS ====================
-    elif aba == "Despesas":
-        st.title("Despesas")
-
-        with st.form("form_despesa"):
-            data = st.date_input("Data da Despesa", value=pd.Timestamp.now())
-            despesa = st.text_input("Descrição")
-            valor = st.number_input("Valor", min_value=0.0, step=0.01)
-            submitted = st.form_submit_button("Adicionar")
-            if submitted:
-                mes = data.month
-                cursor.execute("INSERT INTO despesas (user_id, data, mes, despesa, valor, status) VALUES (?, ?, ?, ?, ?, 'pendente')",
-                               (user_id, str(data), mes, despesa, valor))
-                conn.commit()
-                st.success("Despesa adicionada!")
-                st.rerun()
-
-        df = pd.read_sql_query("SELECT * FROM despesas WHERE user_id = ? ORDER BY data DESC", conn, params=(user_id,))
-        if not df.empty:
-            df['data'] = pd.to_datetime(df['data']).dt.strftime('%d/%m/%Y')
-            df['status'] = df['status'].str.capitalize()
-            st.dataframe(df[['data', 'despesa', 'valor', 'status']], use_container_width=True)
-
-            with st.expander("✏️ Editar ou Excluir Despesa"):
-                despesa_id = st.selectbox("Selecione a Despesa", df['id'])
-                linha = df[df['id'] == despesa_id].iloc[0]
-                nova_data = st.date_input("Data", pd.to_datetime(linha['data'], dayfirst=True))
-                nova_desc = st.text_input("Descrição", linha['despesa'])
-                novo_valor = st.number_input("Valor", value=float(linha['valor']), step=0.01)
-                novo_status = st.selectbox("Status", ["pendente", "pago"], index=0 if linha['status'].lower() == "Pendente" else 1)
-
-                if st.button("Atualizar Despesa"):
-                    cursor.execute("UPDATE despesas SET data = ?, despesa = ?, valor = ?, status = ?, mes = ? WHERE id = ?",
-                                   (str(nova_data), nova_desc, novo_valor, novo_status, nova_data.month, despesa_id))
-                    conn.commit()
-                    st.success("Despesa atualizada!")
-                    st.rerun()
-
-                if st.button("Excluir Despesa"):
-                    cursor.execute("DELETE FROM despesas WHERE id = ?", (despesa_id,))
-                    conn.commit()
-                    st.warning("Despesa excluída.")
-                    st.rerun()
-        else:
-            st.info("Nenhuma despesa registrada.")
-
     # ==================== DASHBOARD ====================
-    elif aba == "Dashboard":
+    if aba == "Dashboard":
         st.title("📊 Dashboard Financeiro")
         mes_atual = datetime.now().month
         ano_atual = datetime.now().year
@@ -205,13 +115,8 @@ else:
 
         df = pd.read_sql_query("SELECT * FROM despesas WHERE user_id = ? AND mes = ?", conn, params=(user_id, mes_filtro))
 
-        if not df.empty:
-            pago = df[df['status'] == 'pago']['valor'].sum()
-            pendente = df[df['status'] == 'pendente']['valor'].sum()
-        else:
-            pago = 0
-            pendente = 0
-
+        pago = df[df['status'] == 'pago']['valor'].sum() if not df.empty else 0
+        pendente = df[df['status'] == 'pendente']['valor'].sum() if not df.empty else 0
         receita_final = receita_valor - pago
 
         col1, col2, col3 = st.columns(3)
@@ -221,10 +126,25 @@ else:
 
         if pendente > 0:
             st.warning(f"Você tem R$ {pendente:.2f} em despesas pendentes!")
+            # enviar_alerta_email("seuemail@exemplo.com", "Despesas Pendentes", f"Você possui R$ {pendente:.2f} pendentes no mês {mes_filtro}/{ano_filtro}.")
 
         st.markdown("---")
-        if not df.empty:
-            df['data'] = pd.to_datetime(df['data'])
-            st.dataframe(df[['data', 'despesa', 'valor', 'status']], use_container_width=True)
-        else:
-            st.info("Sem despesas registradas para este mês.")
+
+        df_desp = pd.read_sql_query("SELECT data, valor FROM despesas WHERE user_id = ? ORDER BY data", conn, params=(user_id,))
+        df_rec = pd.read_sql_query("SELECT data, valor FROM receitas WHERE user_id = ? ORDER BY data", conn, params=(user_id,))
+        df_desp['data'] = pd.to_datetime(df_desp['data'])
+        df_rec['data'] = pd.to_datetime(df_rec['data'])
+
+        df_desp['mes'] = df_desp['data'].dt.to_period('M')
+        df_rec['mes'] = df_rec['data'].dt.to_period('M')
+
+        df_saldo = pd.DataFrame()
+        df_saldo['Gastos'] = df_desp.groupby('mes')['valor'].sum()
+        df_saldo['Receitas'] = df_rec.groupby('mes')['valor'].sum()
+        df_saldo = df_saldo.fillna(0)
+        df_saldo['Saldo'] = df_saldo['Receitas'] - df_saldo['Gastos']
+        st.subheader("📅 Saldo por mês")
+        st.dataframe(df_saldo.reset_index(), use_container_width=True)
+
+        st.download_button("⬇️ Exportar Receitas", df_rec.to_csv(index=False).encode('utf-8'), file_name="receitas.csv", mime='text/csv')
+        st.download_button("⬇️ Exportar Despesas", df_desp.to_csv(index=False).encode('utf-8'), file_name="despesas.csv", mime='text/csv')
