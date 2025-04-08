@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import plotly.express as px
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Controle Financeiro", layout="wide")
 
@@ -72,7 +72,7 @@ else:
             del st.session_state[key]
         st.rerun()
 
-    aba = st.sidebar.radio("Menu", ["Despesas", "Receitas", "Dashboard", "Histórico de Receitas"])
+    aba = st.sidebar.radio("Menu", ["Dashboard", "Despesas", "Receitas", "Histórico de Receitas"])
 
     # ==================== RECEITAS ====================
     if aba == "Receitas":
@@ -135,9 +135,11 @@ else:
             st.dataframe(df_hist[['data', 'categoria', 'valor']], use_container_width=True)
 
             if st.checkbox("📈 Ver gráfico por categoria"):
-                df_sum = df_hist.groupby('categoria')['valor'].sum().reset_index()
-                fig = px.pie(df_sum, names='categoria', values='valor', title="Distribuição por Categoria")
-                st.plotly_chart(fig, use_container_width=True)
+                df_sum = df_hist.groupby('categoria')['valor'].sum()
+                fig, ax = plt.subplots()
+                df_sum.plot(kind='bar', ax=ax)
+                ax.set_title("Receitas por Categoria")
+                st.pyplot(fig)
         else:
             st.info("Nenhuma receita registrada.")
 
@@ -230,10 +232,12 @@ else:
 
         st.markdown("---")
         if not df.empty:
-            df['data'] = pd.to_datetime(df['data']).dt.strftime('%d/%m/%Y')
+            df['data'] = pd.to_datetime(df['data'])
             st.dataframe(df[['data', 'despesa', 'valor', 'status']], use_container_width=True)
 
-            fig = px.bar(df.groupby('status')['valor'].sum().reset_index(), x='status', y='valor', color='status', title="Total de Despesas por Status")
-            st.plotly_chart(fig, use_container_width=True)
+            fig, ax = plt.subplots()
+            df.groupby('status')['valor'].sum().plot(kind='bar', ax=ax)
+            ax.set_title("Total de Despesas por Status")
+            st.pyplot(fig)
         else:
             st.info("Sem despesas registradas para este mês.")
