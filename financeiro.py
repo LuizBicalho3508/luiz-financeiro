@@ -2,7 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Controle Financeiro", layout="wide")
 
@@ -133,13 +132,6 @@ else:
                 df_hist = df_hist[df_hist['data'].isin(pd.to_datetime(filtro_data))]
 
             st.dataframe(df_hist[['data', 'categoria', 'valor']], use_container_width=True)
-
-            if st.checkbox("📈 Ver gráfico por categoria"):
-                df_sum = df_hist.groupby('categoria')['valor'].sum()
-                fig, ax = plt.subplots()
-                df_sum.plot(kind='bar', ax=ax)
-                ax.set_title("Receitas por Categoria")
-                st.pyplot(fig)
         else:
             st.info("Nenhuma receita registrada.")
 
@@ -234,10 +226,5 @@ else:
         if not df.empty:
             df['data'] = pd.to_datetime(df['data'])
             st.dataframe(df[['data', 'despesa', 'valor', 'status']], use_container_width=True)
-
-            fig, ax = plt.subplots()
-            df.groupby('status')['valor'].sum().plot(kind='bar', ax=ax)
-            ax.set_title("Total de Despesas por Status")
-            st.pyplot(fig)
         else:
             st.info("Sem despesas registradas para este mês.")
