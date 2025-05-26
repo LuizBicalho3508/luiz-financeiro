@@ -41,6 +41,10 @@ def initialize_app_session_state():
         st.session_state.editing_transaction = None # {'id': trans_id, 'data': trans_data}
     if 'pending_delete_id' not in st.session_state:
         st.session_state.pending_delete_id = None # trans_id
+    # Inicializa a chave para o radio button de modo de transação se não existir
+    if 'transaction_mode_selection_key' not in st.session_state:
+        st.session_state.transaction_mode_selection_key = "Único"
+
 
 initialize_app_session_state()
 
@@ -111,13 +115,11 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
         else:
             final_description = description 
             if is_recurring and num_installments == 1: 
-                 # Usa 'description' que é a descrição original passada para a função
                  final_description = f"{description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
 
             _save_single_transaction_to_firestore_internal(
                 user, date_obj, transaction_type, category, final_description, amount
             )
-            # Evita mensagem duplicada se já foi mostrada para múltiplas parcelas
             if not (is_recurring and num_installments > 1): 
                 st.success(f"{transaction_type} '{category}' adicionada com sucesso!")
     except Exception as e:
@@ -303,62 +305,71 @@ def page_login():
         if st.form_submit_button("Entrar"):
             login_user(username, password)
 
-# Callback para forçar o recarregamento da UI quando o modo de transação muda
-def force_rerun_on_mode_change():
-    st.rerun()
-
 def page_log_transaction():
     st.header(f"Olá, {st.session_state.user}! Registre uma nova transação:")
     display_edit_transaction_form() 
 
+    # Radio button OUTSIDE the form
+    # Its value will be in st.session_state.transaction_mode_selection_key
+    # Streamlit automatically reruns the script when this radio's value changes.
+    st.radio(
+        "Tipo de Lançamento:",
+        ("Único", "Parcelado"),
+        horizontal=True,
+        key="transaction_mode_selection_key" # This key stores the selection in st.session_state
+    )
+
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date_input")
-            transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type_select")
+            # These widgets are part of the form
+            transaction_date_val = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="form_trans_date")
+            transaction_type_val = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="form_trans_type")
         with col2:
             common_categories = {
                 "Receita": ["Salário", "Freelance", "Rendimentos", "Outros"],
                 "Despesa": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Educação", "Vestuário", "Contas", "Outros"],
                 "Investimento": ["Ações", "Fundos Imobiliários", "Renda Fixa", "Criptomoedas", "Outros"]
             }
-            category_options = common_categories.get(transaction_type, ["Outros"])
-            category = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="trans_category_input", placeholder="Ou digite uma nova")
+            category_options = common_categories.get(transaction_type_val, ["Outros"]) # Uses current value of selectbox
+            category_val = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="form_trans_category", placeholder="Ou digite uma nova")
             st.caption(f"Sugestões: {', '.join(category_options)}")
             
-        description = st.text_area("Descrição (Opcional)", key="trans_desc_area")
-        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount_input")
+        description_val = st.text_area("Descrição (Opcional)", key="form_trans_desc")
+        amount_val = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="form_trans_amount")
         
         st.markdown("---") 
         
-        # Usar st.radio para tipo de lançamento com on_change callback
-        # O valor do radio é armazenado em st.session_state.trans_mode_radio_key
-        current_transaction_mode = st.radio(
-            "Tipo de Lançamento:",
-            ("Único", "Parcelado"),
-            horizontal=True,
-            key="trans_mode_radio_key", # Chave para o estado da sessão do radio
-            on_change=force_rerun_on_mode_change # Callback para forçar recarregamento
-        )
-        
-        num_installments = 1
-        is_recurring_flag = False
+        num_installments_val = 1
+        is_recurring_flag_val = False
 
-        # A lógica condicional agora usa o valor do radio button (que foi atualizado após o rerun)
-        if current_transaction_mode == "Parcelado":
-            is_recurring_flag = True
-            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=2, step=1, key="trans_num_parcelas_input")
+        # Conditional display based on the radio button's state (which is outside the form)
+        # Access the radio's state via st.session_state
+        if st.session_state.transaction_mode_selection_key == "Parcelado":
+            is_recurring_flag_val = True
+            # Preserves the number input value if user toggles radio button
+            num_installments_val = st.number_input("Número Total de Parcelas", 
+                                                   min_value=1, 
+                                                   value=st.session_state.get("form_num_installments_val", 2), 
+                                                   step=1, 
+                                                   key="form_num_installments_val")
         
-        if st.form_submit_button("Adicionar Transação"):
+        submitted = st.form_submit_button("Adicionar Transação")
+        
+        if submitted:
+            # If Parcelado was selected, update the session state for the number_input to remember its value
+            if st.session_state.transaction_mode_selection_key == "Parcelado":
+                 st.session_state.form_num_installments_val = num_installments_val
+
             add_transaction(
                 st.session_state.user, 
-                transaction_date, 
-                transaction_type, 
-                category, 
-                description, 
-                amount,
-                is_recurring_flag, 
-                num_installments 
+                transaction_date_val, 
+                transaction_type_val, 
+                category_val, 
+                description_val, 
+                amount_val,
+                is_recurring_flag_val, 
+                num_installments_val 
             )
     
     st.markdown("---")
