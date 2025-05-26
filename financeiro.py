@@ -5,7 +5,6 @@ import plotly.express as px
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-from collections import OrderedDict
 
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
@@ -223,7 +222,7 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         cols[0].write(row['date'].strftime('%d/%m/%Y') if pd.notnull(row['date']) else 'N/A')
         cols[1].write(row['type'])
         cols[2].write(row['category'])
-        cols[3].write(row.get('description', '')[:30] + '...' if len(row.get('description', '')) > 30 else row.get('description', '')) # Limita descrição
+        cols[3].write(row.get('description', '')[:30] + '...' if len(row.get('description', '')) > 30 else row.get('description', '')) 
         cols[4].write(f"R$ {row['amount']:.2f}")
 
         if can_edit_delete:
@@ -296,7 +295,7 @@ def page_log_transaction():
 
 def display_summary_charts_and_data(df_period, df_full_history_for_user_or_couple, title_prefix=""):
     """
-    Exibe o resumo financeiro, gráficos de pizza para o período selecionado
+    Exibe o resumo financeiro, um gráfico de pizza consolidado para o período selecionado
     e um gráfico de linha para o histórico dos últimos 12 meses.
     """
     if df_period.empty:
@@ -304,80 +303,106 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
     else:
         receitas = df_period[df_period['type'] == 'Receita']['amount'].sum()
         despesas = df_period[df_period['type'] == 'Despesa']['amount'].sum()
-        investimentos = df_period[df_period['type'] == 'Investimento']['amount'].sum()
-        saldo = receitas - (despesas + investimentos)
+        investimentos_periodo = df_period[df_period['type'] == 'Investimento']['amount'].sum() # Mantido para o resumo numérico
+        saldo = receitas - (despesas + investimentos_periodo) # Saldo considera investimentos do período
 
         st.subheader(f"{title_prefix}Resumo do Mês Selecionado")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Receitas", f"R$ {receitas:,.2f}")
         col2.metric("Despesas", f"R$ {despesas:,.2f}")
-        col3.metric("Investimentos", f"R$ {investimentos:,.2f}")
+        col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") # Mostra investimentos do mês
         col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
 
-        # Gráficos de Pizza para o mês selecionado
-        st.subheader(f"{title_prefix}Distribuição do Mês Selecionado")
-        col_chart1, col_chart2 = st.columns(2)
-        with col_chart1:
-            despesas_df_period = df_period[df_period['type'] == 'Despesa']
-            if not despesas_df_period.empty:
-                fig_despesas = px.pie(despesas_df_period, values='amount', names='category', title='Despesas por Categoria')
-                fig_despesas.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_despesas, use_container_width=True)
-            else:
-                st.info(f"{title_prefix}Nenhuma despesa neste período.")
-
-        with col_chart2:
-            receitas_df_period = df_period[df_period['type'] == 'Receita']
-            if not receitas_df_period.empty:
-                fig_receitas = px.pie(receitas_df_period, values='amount', names='category', title='Receitas por Categoria')
-                fig_receitas.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_receitas, use_container_width=True)
-            else:
-                st.info(f"{title_prefix}Nenhuma receita neste período.")
+        # Novo Gráfico de Pizza Único: Receita vs. Despesa
+        st.subheader(f"{title_prefix}Composição Receita vs. Despesa (Mês Selecionado)")
         
-        if investimentos > 0:
-            investimentos_df_period = df_period[df_period['type'] == 'Investimento']
-            if not investimentos_df_period.empty:
-                st.subheader(f"{title_prefix}Investimentos por Categoria (Mês Selecionado)")
-                fig_invest = px.pie(investimentos_df_period, values='amount', names='category')
-                fig_invest.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_invest, use_container_width=True)
+        chart_values = []
+        chart_names = []
+        chart_colors = []
+        chart_title = "Situação Financeira do Mês"
+
+        if receitas == 0 and despesas == 0:
+            st.info(f"{title_prefix}Sem dados de receita ou despesa para este período.")
+        elif receitas == 0 and despesas > 0:
+            chart_values = [despesas]
+            chart_names = ['Despesas (Sem Receita)']
+            chart_colors = ['crimson']
+            chart_title = "Situação Financeira: Déficit (Sem Receita)"
+        elif receitas > 0:
+            if despesas <= receitas:
+                chart_values = [despesas, receitas - despesas]
+                chart_names = ['Despesas Cobertas', 'Saldo Positivo da Receita']
+                # Cor da despesa pode ser algo como 'gold' ou 'sandybrown' para indicar consumo
+                # Cor do saldo 'lightgreen'
+                chart_colors = ['sandybrown', 'lightgreen'] 
+                chart_title = "Receita vs. Despesa: Saldo Positivo"
+                if despesas == 0 and (receitas - despesas) == 0: # Caso de receita zero e despesa zero, já tratado
+                    pass
+                elif despesas == 0 : # Apenas receita positiva
+                     chart_values = [receitas - despesas]
+                     chart_names = ['Saldo Positivo da Receita']
+                     chart_colors = ['lightgreen']
+                elif (receitas - despesas) == 0: # Despesas cobriram toda a receita, sem saldo
+                     chart_values = [despesas]
+                     chart_names = ['Despesas (Cobriram 100% da Receita)']
+                     chart_colors = ['sandybrown']
+
+
+            else: # despesas > receitas (Déficit)
+                chart_values = [receitas, despesas - receitas] 
+                chart_names = ['Receita (Totalmente Coberta por Despesas)', 'Despesa Excedente (Déficit)']
+                chart_colors = ['lightcoral', 'crimson'] 
+                chart_title = "Receita vs. Despesa: Déficit"
+        
+        if chart_values and sum(chart_values) > 0: # Garante que há algo para plotar
+            fig_comp = px.pie(values=chart_values, 
+                                names=chart_names, 
+                                title=chart_title,
+                                color_discrete_sequence=chart_colors)
+            fig_comp.update_traces(textposition='inside', textinfo='percent+label+value', hole=.3 if len(chart_values)>1 else 0)
+            st.plotly_chart(fig_comp, use_container_width=True)
+        elif not (receitas == 0 and despesas == 0) : # Se não for o caso de "sem dados" mas ainda assim não plotou
+            st.info(f"{title_prefix}Dados insuficientes ou zerados para o gráfico de pizza de composição.")
+        
         st.markdown("---")
+
 
     # Gráfico de Linha Histórico (Últimos 12 meses de dados)
     if not df_full_history_for_user_or_couple.empty:
         st.subheader(f"{title_prefix}Histórico Mensal (Últimos 12 Meses de Dados)")
         
-        # Garante que 'month_year' existe e está no formato correto
         df_history_copy = df_full_history_for_user_or_couple.copy()
         if 'date' in df_history_copy.columns:
              df_history_copy['month_year'] = pd.to_datetime(df_history_copy['date']).dt.strftime('%Y-%m')
         
-        # Pega os últimos 12 meses únicos com transações
         available_months_sorted = sorted(df_history_copy['month_year'].unique(), reverse=True)
         last_12_months = available_months_sorted[:12]
 
         if last_12_months:
             history_12m_df = df_history_copy[df_history_copy['month_year'].isin(last_12_months)]
             
-            monthly_summary = history_12m_df.groupby(['month_year', 'type'])['amount'].sum().unstack(fill_value=0).reset_index()
+            # Considerar apenas Receitas e Despesas para este gráfico de linha específico
+            history_12m_df_filtered = history_12m_df[history_12m_df['type'].isin(['Receita', 'Despesa'])]
             
-            # Garante que as colunas Receita e Despesa existam
-            if 'Receita' not in monthly_summary.columns:
-                monthly_summary['Receita'] = 0
-            if 'Despesa' not in monthly_summary.columns:
-                monthly_summary['Despesa'] = 0
-            
-            # Ordena por month_year para o gráfico de linha
-            monthly_summary = monthly_summary.sort_values(by='month_year')
+            if not history_12m_df_filtered.empty:
+                monthly_summary = history_12m_df_filtered.groupby(['month_year', 'type'])['amount'].sum().unstack(fill_value=0).reset_index()
+                
+                if 'Receita' not in monthly_summary.columns:
+                    monthly_summary['Receita'] = 0
+                if 'Despesa' not in monthly_summary.columns:
+                    monthly_summary['Despesa'] = 0
+                
+                monthly_summary = monthly_summary.sort_values(by='month_year')
 
-            fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
-                                       title='Receitas vs. Despesas Mensais',
-                                       labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'},
-                                       markers=True)
-            fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
-            st.plotly_chart(fig_line_history, use_container_width=True)
+                fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
+                                           title='Receitas vs. Despesas Mensais',
+                                           labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'},
+                                           markers=True)
+                fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
+                st.plotly_chart(fig_line_history, use_container_width=True)
+            else:
+                st.info(f"{title_prefix}Não há dados de Receita ou Despesa no histórico de 12 meses.")
         else:
             st.info(f"{title_prefix}Não há dados suficientes para o histórico de 12 meses.")
     else:
@@ -395,12 +420,11 @@ def page_my_summary():
     st.header(f"Meu Resumo Financeiro - {st.session_state.user}")
     display_edit_transaction_form() 
     
-    df_all_transactions_system = get_transactions_df() # Todas as transações do sistema
+    df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação no banco de dados. Comece adicionando algumas!")
         return
 
-    # Filtra transações apenas do usuário logado para todo o histórico dele
     df_user_full_history = df_all_transactions_system[df_all_transactions_system['user'] == st.session_state.user].copy()
     if df_user_full_history.empty:
         st.info("Você ainda não registrou transações.")
@@ -416,21 +440,18 @@ def page_my_summary():
         
     selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", available_months_user, key="my_summary_month_select")
     if selected_month:
-        # df_period_user é o DataFrame apenas para o mês selecionado
         df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month]
-        # df_user_full_history é passado para o gráfico de linha
         display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
 
 def page_couple_summary():
     st.header("Resumo Financeiro do Casal")
     display_edit_transaction_form() 
 
-    df_all_transactions_system = get_transactions_df() # Todas as transações do sistema
+    df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação registrada no banco de dados.")
         return
 
-    # df_all_transactions_system já contém o histórico completo do casal
     if 'date' in df_all_transactions_system.columns: 
         df_all_transactions_system['month_year'] = pd.to_datetime(df_all_transactions_system['date']).dt.strftime('%Y-%m')
 
@@ -441,9 +462,7 @@ def page_couple_summary():
 
     selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", available_months_couple, key="couple_summary_month_select")
     if selected_month:
-        # df_period_couple é o DataFrame apenas para o mês selecionado
         df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month]
-        # df_all_transactions_system é passado para o gráfico de linha
         display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
 
 # --- Lógica Principal da Aplicação ---
