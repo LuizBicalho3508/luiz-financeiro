@@ -88,18 +88,15 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
 
     try:
         if is_recurring and num_installments > 1:
-            original_description = description
-            amount_per_installment = amount # O valor inserido é por parcela
+            original_description = description # Salva a descrição original
+            amount_per_installment = amount 
 
             for i in range(num_installments):
                 current_month_offset = i 
                 
-                # Calcula ano e mês para a parcela atual
                 year_of_installment = date_obj.year + (date_obj.month - 1 + current_month_offset) // 12
                 month_of_installment = (date_obj.month - 1 + current_month_offset) % 12 + 1
                 
-                # Determina o dia, garantindo que é válido para o mês calculado
-                # ex: se a primeira parcela é 31/Jan, a próxima será 28/Fev ou 29/Fev
                 day_of_installment = min(date_obj.day, calendar.monthrange(year_of_installment, month_of_installment)[1])
                 
                 current_installment_date = datetime.date(year_of_installment, month_of_installment, day_of_installment)
@@ -112,15 +109,16 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
                 )
             st.success(f"{num_installments} parcelas de '{category}' adicionadas com sucesso!")
         else:
-            # Transação única (ou primeira parcela de uma, se num_installments for 1)
-            final_description = description
-            if is_recurring and num_installments == 1: # Se marcou parcelado mas só 1 parcela
-                 final_description = f"{original_description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
+            final_description = description 
+            if is_recurring and num_installments == 1: 
+                 # Usa 'description' que é a descrição original passada para a função
+                 final_description = f"{description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
 
             _save_single_transaction_to_firestore_internal(
                 user, date_obj, transaction_type, category, final_description, amount
             )
-            if not (is_recurring and num_installments > 1) : # Evita duplicar mensagem de sucesso
+            # Evita mensagem duplicada se já foi mostrada para múltiplas parcelas
+            if not (is_recurring and num_installments > 1): 
                 st.success(f"{transaction_type} '{category}' adicionada com sucesso!")
     except Exception as e:
         st.error(f"Erro ao adicionar transação(ões): {e}")
@@ -305,6 +303,10 @@ def page_login():
         if st.form_submit_button("Entrar"):
             login_user(username, password)
 
+# Callback para forçar o recarregamento da UI quando o modo de transação muda
+def force_rerun_on_mode_change():
+    st.rerun()
+
 def page_log_transaction():
     st.header(f"Olá, {st.session_state.user}! Registre uma nova transação:")
     display_edit_transaction_form() 
@@ -312,8 +314,8 @@ def page_log_transaction():
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date_input") # Chave alterada
-            transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type_select") # Chave alterada
+            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date_input")
+            transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type_select")
         with col2:
             common_categories = {
                 "Receita": ["Salário", "Freelance", "Rendimentos", "Outros"],
@@ -321,27 +323,31 @@ def page_log_transaction():
                 "Investimento": ["Ações", "Fundos Imobiliários", "Renda Fixa", "Criptomoedas", "Outros"]
             }
             category_options = common_categories.get(transaction_type, ["Outros"])
-            category = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="trans_category_input", placeholder="Ou digite uma nova") # Chave alterada
+            category = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="trans_category_input", placeholder="Ou digite uma nova")
             st.caption(f"Sugestões: {', '.join(category_options)}")
             
-        description = st.text_area("Descrição (Opcional)", key="trans_desc_area") # Chave alterada
-        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount_input") # Chave alterada
+        description = st.text_area("Descrição (Opcional)", key="trans_desc_area")
+        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount_input")
         
         st.markdown("---") 
         
-        # Alteração: Usar st.radio para tipo de lançamento
-        transaction_mode = st.radio(
+        # Usar st.radio para tipo de lançamento com on_change callback
+        # O valor do radio é armazenado em st.session_state.trans_mode_radio_key
+        current_transaction_mode = st.radio(
             "Tipo de Lançamento:",
             ("Único", "Parcelado"),
             horizontal=True,
-            key="trans_mode_radio" # Chave alterada
+            key="trans_mode_radio_key", # Chave para o estado da sessão do radio
+            on_change=force_rerun_on_mode_change # Callback para forçar recarregamento
         )
         
         num_installments = 1
         is_recurring_flag = False
-        if transaction_mode == "Parcelado":
+
+        # A lógica condicional agora usa o valor do radio button (que foi atualizado após o rerun)
+        if current_transaction_mode == "Parcelado":
             is_recurring_flag = True
-            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=2, step=1, key="trans_num_parcelas_input") # Chave alterada, valor padrão 2
+            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=2, step=1, key="trans_num_parcelas_input")
         
         if st.form_submit_button("Adicionar Transação"):
             add_transaction(
