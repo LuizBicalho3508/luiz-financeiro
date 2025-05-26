@@ -357,10 +357,8 @@ def page_log_transaction():
         submitted = st.form_submit_button("Adicionar Transação")
         
         if submitted:
-            # If Parcelado was selected, update the session state for the number_input to remember its value
-            if st.session_state.transaction_mode_selection_key == "Parcelado":
-                 st.session_state.form_num_installments_val = num_installments_val
-
+            # A linha que causava o erro foi removida daqui.
+            # O valor de num_installments_val já está correto e será usado.
             add_transaction(
                 st.session_state.user, 
                 transaction_date_val, 
