@@ -113,10 +113,15 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
             st.success(f"{num_installments} parcelas de '{category}' adicionadas com sucesso!")
         else:
             # Transação única (ou primeira parcela de uma, se num_installments for 1)
+            final_description = description
+            if is_recurring and num_installments == 1: # Se marcou parcelado mas só 1 parcela
+                 final_description = f"{original_description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
+
             _save_single_transaction_to_firestore_internal(
-                user, date_obj, transaction_type, category, description, amount
+                user, date_obj, transaction_type, category, final_description, amount
             )
-            st.success(f"{transaction_type} '{category}' adicionada com sucesso!")
+            if not (is_recurring and num_installments > 1) : # Evita duplicar mensagem de sucesso
+                st.success(f"{transaction_type} '{category}' adicionada com sucesso!")
     except Exception as e:
         st.error(f"Erro ao adicionar transação(ões): {e}")
 
@@ -307,8 +312,8 @@ def page_log_transaction():
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date")
-            transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type")
+            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date_input") # Chave alterada
+            transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type_select") # Chave alterada
         with col2:
             common_categories = {
                 "Receita": ["Salário", "Freelance", "Rendimentos", "Outros"],
@@ -316,17 +321,27 @@ def page_log_transaction():
                 "Investimento": ["Ações", "Fundos Imobiliários", "Renda Fixa", "Criptomoedas", "Outros"]
             }
             category_options = common_categories.get(transaction_type, ["Outros"])
-            category = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="trans_category", placeholder="Ou digite uma nova")
+            category = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="trans_category_input", placeholder="Ou digite uma nova") # Chave alterada
             st.caption(f"Sugestões: {', '.join(category_options)}")
             
-        description = st.text_area("Descrição (Opcional)", key="trans_desc")
-        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount")
+        description = st.text_area("Descrição (Opcional)", key="trans_desc_area") # Chave alterada
+        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount_input") # Chave alterada
         
-        st.markdown("---") # Separador visual
-        is_recurring = st.checkbox("É uma transação recorrente (parcelada)?", key="trans_recorrente")
+        st.markdown("---") 
+        
+        # Alteração: Usar st.radio para tipo de lançamento
+        transaction_mode = st.radio(
+            "Tipo de Lançamento:",
+            ("Único", "Parcelado"),
+            horizontal=True,
+            key="trans_mode_radio" # Chave alterada
+        )
+        
         num_installments = 1
-        if is_recurring:
-            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=1, step=1, key="trans_num_parcelas")
+        is_recurring_flag = False
+        if transaction_mode == "Parcelado":
+            is_recurring_flag = True
+            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=2, step=1, key="trans_num_parcelas_input") # Chave alterada, valor padrão 2
         
         if st.form_submit_button("Adicionar Transação"):
             add_transaction(
@@ -336,8 +351,8 @@ def page_log_transaction():
                 category, 
                 description, 
                 amount,
-                is_recurring, # Novo parâmetro
-                num_installments # Novo parâmetro
+                is_recurring_flag, 
+                num_installments 
             )
     
     st.markdown("---")
