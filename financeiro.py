@@ -5,6 +5,7 @@ import plotly.express as px
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
+import calendar # Adicionado para cálculo de datas de parcelas
 
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
@@ -60,25 +61,65 @@ def logout_user():
     st.rerun()
 
 # --- Funções CRUD para Transações com Firestore ---
-def add_transaction(user, date_obj, transaction_type, category, description, amount):
+
+def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_type, category, description, amount):
+    """Helper interno para salvar um único documento de transação no Firestore. Assume que 'db' está disponível."""
+    timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
+    doc_ref = db.collection("transactions").document() # Firestore gera ID automaticamente
+    doc_ref.set({
+        "user": user,
+        "date": timestamp_obj, 
+        "type": transaction_type,
+        "category": category.strip().capitalize(),
+        "description": description.strip(),
+        "amount": float(amount), 
+        "month_year": date_obj.strftime("%Y-%m"), 
+        "created_at": firestore.SERVER_TIMESTAMP 
+    })
+
+def add_transaction(user, date_obj, transaction_type, category, description, amount, is_recurring, num_installments):
+    """Adiciona uma transação única ou uma série de transações parceladas."""
     if not db:
         st.error("Conexão com o banco de dados não estabelecida.")
         return
     if not category or amount <= 0:
-        st.warning("Preencha a categoria e um valor positivo.")
+        st.warning("Preencha a categoria e um valor positivo para a parcela.")
         return
+
     try:
-        timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
-        doc_ref = db.collection("transactions").document()
-        doc_ref.set({
-            "user": user, "date": timestamp_obj, "type": transaction_type,
-            "category": category.strip().capitalize(), "description": description.strip(),
-            "amount": float(amount), "month_year": date_obj.strftime("%Y-%m"),
-            "created_at": firestore.SERVER_TIMESTAMP
-        })
-        st.success(f"{transaction_type} adicionada com sucesso!")
+        if is_recurring and num_installments > 1:
+            original_description = description
+            amount_per_installment = amount # O valor inserido é por parcela
+
+            for i in range(num_installments):
+                current_month_offset = i 
+                
+                # Calcula ano e mês para a parcela atual
+                year_of_installment = date_obj.year + (date_obj.month - 1 + current_month_offset) // 12
+                month_of_installment = (date_obj.month - 1 + current_month_offset) % 12 + 1
+                
+                # Determina o dia, garantindo que é válido para o mês calculado
+                # ex: se a primeira parcela é 31/Jan, a próxima será 28/Fev ou 29/Fev
+                day_of_installment = min(date_obj.day, calendar.monthrange(year_of_installment, month_of_installment)[1])
+                
+                current_installment_date = datetime.date(year_of_installment, month_of_installment, day_of_installment)
+
+                installment_description = f"{original_description} (Parcela {i+1}/{num_installments})" if original_description else f"Parcela {i+1}/{num_installments} de {category}"
+                
+                _save_single_transaction_to_firestore_internal(
+                    user, current_installment_date, transaction_type, category, 
+                    installment_description, amount_per_installment
+                )
+            st.success(f"{num_installments} parcelas de '{category}' adicionadas com sucesso!")
+        else:
+            # Transação única (ou primeira parcela de uma, se num_installments for 1)
+            _save_single_transaction_to_firestore_internal(
+                user, date_obj, transaction_type, category, description, amount
+            )
+            st.success(f"{transaction_type} '{category}' adicionada com sucesso!")
     except Exception as e:
-        st.error(f"Erro ao adicionar transação: {e}")
+        st.error(f"Erro ao adicionar transação(ões): {e}")
+
 
 def get_transactions_df():
     if not db:
@@ -266,7 +307,7 @@ def page_log_transaction():
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            transaction_date = st.date_input("Data da Transação", datetime.date.today(), key="trans_date")
+            transaction_date = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="trans_date")
             transaction_type = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="trans_type")
         with col2:
             common_categories = {
@@ -279,10 +320,25 @@ def page_log_transaction():
             st.caption(f"Sugestões: {', '.join(category_options)}")
             
         description = st.text_area("Descrição (Opcional)", key="trans_desc")
-        amount = st.number_input("Valor (R$)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount")
+        amount = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="trans_amount")
+        
+        st.markdown("---") # Separador visual
+        is_recurring = st.checkbox("É uma transação recorrente (parcelada)?", key="trans_recorrente")
+        num_installments = 1
+        if is_recurring:
+            num_installments = st.number_input("Número Total de Parcelas", min_value=1, value=1, step=1, key="trans_num_parcelas")
         
         if st.form_submit_button("Adicionar Transação"):
-            add_transaction(st.session_state.user, transaction_date, transaction_type, category, description, amount)
+            add_transaction(
+                st.session_state.user, 
+                transaction_date, 
+                transaction_type, 
+                category, 
+                description, 
+                amount,
+                is_recurring, # Novo parâmetro
+                num_installments # Novo parâmetro
+            )
     
     st.markdown("---")
     st.subheader("Últimas Transações Lançadas por Você:")
@@ -294,27 +350,22 @@ def page_log_transaction():
         st.info("Nenhuma transação registrada no banco de dados.")
 
 def display_summary_charts_and_data(df_period, df_full_history_for_user_or_couple, title_prefix=""):
-    """
-    Exibe o resumo financeiro, um gráfico de pizza consolidado para o período selecionado
-    e um gráfico de linha para o histórico dos últimos 12 meses.
-    """
     if df_period.empty:
         st.info(f"{title_prefix}Nenhuma transação encontrada para o período selecionado.")
     else:
         receitas = df_period[df_period['type'] == 'Receita']['amount'].sum()
         despesas = df_period[df_period['type'] == 'Despesa']['amount'].sum()
-        investimentos_periodo = df_period[df_period['type'] == 'Investimento']['amount'].sum() # Mantido para o resumo numérico
-        saldo = receitas - (despesas + investimentos_periodo) # Saldo considera investimentos do período
+        investimentos_periodo = df_period[df_period['type'] == 'Investimento']['amount'].sum() 
+        saldo = receitas - (despesas + investimentos_periodo) 
 
         st.subheader(f"{title_prefix}Resumo do Mês Selecionado")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Receitas", f"R$ {receitas:,.2f}")
         col2.metric("Despesas", f"R$ {despesas:,.2f}")
-        col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") # Mostra investimentos do mês
+        col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") 
         col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
 
-        # Novo Gráfico de Pizza Único: Receita vs. Despesa
         st.subheader(f"{title_prefix}Composição Receita vs. Despesa (Mês Selecionado)")
         
         chart_values = []
@@ -333,42 +384,36 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
             if despesas <= receitas:
                 chart_values = [despesas, receitas - despesas]
                 chart_names = ['Despesas Cobertas', 'Saldo Positivo da Receita']
-                # Cor da despesa pode ser algo como 'gold' ou 'sandybrown' para indicar consumo
-                # Cor do saldo 'lightgreen'
                 chart_colors = ['sandybrown', 'lightgreen'] 
                 chart_title = "Receita vs. Despesa: Saldo Positivo"
-                if despesas == 0 and (receitas - despesas) == 0: # Caso de receita zero e despesa zero, já tratado
+                if despesas == 0 and (receitas - despesas) == 0: 
                     pass
-                elif despesas == 0 : # Apenas receita positiva
+                elif despesas == 0 : 
                      chart_values = [receitas - despesas]
                      chart_names = ['Saldo Positivo da Receita']
                      chart_colors = ['lightgreen']
-                elif (receitas - despesas) == 0: # Despesas cobriram toda a receita, sem saldo
+                elif (receitas - despesas) == 0: 
                      chart_values = [despesas]
                      chart_names = ['Despesas (Cobriram 100% da Receita)']
                      chart_colors = ['sandybrown']
-
-
-            else: # despesas > receitas (Déficit)
+            else: 
                 chart_values = [receitas, despesas - receitas] 
                 chart_names = ['Receita (Totalmente Coberta por Despesas)', 'Despesa Excedente (Déficit)']
                 chart_colors = ['lightcoral', 'crimson'] 
                 chart_title = "Receita vs. Despesa: Déficit"
         
-        if chart_values and sum(chart_values) > 0: # Garante que há algo para plotar
+        if chart_values and sum(chart_values) > 0: 
             fig_comp = px.pie(values=chart_values, 
                                 names=chart_names, 
                                 title=chart_title,
                                 color_discrete_sequence=chart_colors)
             fig_comp.update_traces(textposition='inside', textinfo='percent+label+value', hole=.3 if len(chart_values)>1 else 0)
             st.plotly_chart(fig_comp, use_container_width=True)
-        elif not (receitas == 0 and despesas == 0) : # Se não for o caso de "sem dados" mas ainda assim não plotou
+        elif not (receitas == 0 and despesas == 0) : 
             st.info(f"{title_prefix}Dados insuficientes ou zerados para o gráfico de pizza de composição.")
         
         st.markdown("---")
 
-
-    # Gráfico de Linha Histórico (Últimos 12 meses de dados)
     if not df_full_history_for_user_or_couple.empty:
         st.subheader(f"{title_prefix}Histórico Mensal (Últimos 12 Meses de Dados)")
         
@@ -381,8 +426,6 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
 
         if last_12_months:
             history_12m_df = df_history_copy[df_history_copy['month_year'].isin(last_12_months)]
-            
-            # Considerar apenas Receitas e Despesas para este gráfico de linha específico
             history_12m_df_filtered = history_12m_df[history_12m_df['type'].isin(['Receita', 'Despesa'])]
             
             if not history_12m_df_filtered.empty:
