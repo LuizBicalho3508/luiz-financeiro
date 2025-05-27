@@ -22,19 +22,28 @@ PAYMENT_STATUS_OPTIONS = ["Pendente", "Pago"] # Opções de status
 def initialize_firebase():
     if not firebase_admin._apps:
         try:
+            # Tenta carregar as credenciais dos secrets do Streamlit
             firebase_creds_json_str = st.secrets.get("FIREBASE_SERVICE_ACCOUNT_JSON")
             if not firebase_creds_json_str:
                 st.error("Credenciais da conta de serviço Firebase não encontradas nos Streamlit Secrets.")
-                st.stop()
+                st.info("Por favor, adicione suas credenciais Firebase JSON como um segredo chamado 'FIREBASE_SERVICE_ACCOUNT_JSON' nas configurações do seu app Streamlit Cloud.")
+                st.stop() # Para a execução se as credenciais não forem encontradas
                 return None
+            
+            # Analisa a string JSON para um dicionário
             firebase_creds_dict = json.loads(firebase_creds_json_str)
+            
             cred = credentials.Certificate(firebase_creds_dict)
             firebase_admin.initialize_app(cred)
+            # st.success("Firebase inicializado com sucesso!") # Opcional: para depuração
         except Exception as e:
             st.error(f"Erro ao inicializar o Firebase: {e}")
-            st.stop()
+            st.info("Verifique se as credenciais Firebase JSON estão corretas e no formato esperado.")
+            st.stop() # Para a execução em caso de erro
             return None
-    return firestore.client()
+    
+    db_client = firestore.client()
+    return db_client
 
 db = initialize_firebase()
 
@@ -57,6 +66,7 @@ initialize_app_session_state()
 
 # --- Funções Auxiliares de Formatação de Data ---
 def format_month_year_for_display(month_year_str): # "YYYY-MM"
+    """Converte 'YYYY-MM' para 'Nome do Mês de YYYY'."""
     if not month_year_str or len(month_year_str) != 7 or month_year_str[4] != '-':
         return month_year_str 
     try:
@@ -68,15 +78,24 @@ def format_month_year_for_display(month_year_str): # "YYYY-MM"
         return month_year_str 
 
 def parse_display_month_year(display_month_year_str): # "Nome do Mês de YYYY"
+    """Converte 'Nome do Mês de YYYY' de volta para 'YYYY-MM'."""
     try:
         parts = display_month_year_str.split(" de ")
-        if len(parts) != 2: return None
-        month_name_pt, year_str = parts[0], parts[1]
-        if month_name_pt not in PORTUGUESE_MONTHS: return None
+        if len(parts) != 2:
+            return None # Formato inválido
+        month_name_pt = parts[0]
+        year_str = parts[1]
+        
+        if month_name_pt not in PORTUGUESE_MONTHS:
+            return None # Nome do mês inválido
+            
         month_num = PORTUGUESE_MONTHS.index(month_name_pt) + 1
-        year_num = int(year_str)
-        return f"{year_num:04d}-{month_num:02d}"
-    except Exception: return None
+        year_num = int(year_str) # Converte ano para int
+        
+        return f"{year_num:04d}-{month_num:02d}" # Formata YYYY-MM
+    except Exception: # Captura erros de conversão ou índice
+        return None
+
 
 # --- Funções de Autenticação ---
 def login_user(username, password):
@@ -85,7 +104,8 @@ def login_user(username, password):
         st.session_state.user = username
         st.session_state.last_main_menu_selection = None 
         st.rerun()
-    else: st.error("Usuário ou senha incorretos.")
+    else:
+        st.error("Usuário ou senha incorretos.")
 
 def logout_user():
     st.session_state.logged_in = False
@@ -93,12 +113,16 @@ def logout_user():
     st.session_state.editing_transaction = None 
     st.session_state.pending_delete_id = None
     st.session_state.last_main_menu_selection = None 
-    if "my_summary_month_select" in st.session_state: del st.session_state.my_summary_month_select
-    if "couple_summary_month_select" in st.session_state: del st.session_state.couple_summary_month_select
+    if "my_summary_month_select" in st.session_state:
+        del st.session_state.my_summary_month_select
+    if "couple_summary_month_select" in st.session_state:
+        del st.session_state.couple_summary_month_select
     st.rerun()
 
 # --- Funções CRUD para Transações com Firestore ---
 def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_type, category, description, amount, payment_status=None):
+    if not db: st.error("Conexão com o banco de dados falhou ao salvar."); return
+
     timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
     doc_ref = db.collection("transactions").document() 
     data_to_save = {
@@ -127,13 +151,13 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
                 day_of_installment = min(date_obj.day, calendar.monthrange(year_of_installment, month_of_installment)[1])
                 current_installment_date = datetime.date(year_of_installment, month_of_installment, day_of_installment)
                 installment_description = f"{original_description} (Parcela {i+1}/{num_installments})" if original_description else f"Parcela {i+1}/{num_installments} de {category}"
-                # Para parcelas, o status de pagamento da primeira parcela é aplicado a todas, ou default para Pendente
-                current_payment_status = payment_status if i == 0 else "Pendente" 
-                if transaction_type != "Despesa": current_payment_status = None
+                
+                current_payment_status_for_installment = payment_status if i == 0 and transaction_type == "Despesa" else "Pendente"
+                if transaction_type != "Despesa": current_payment_status_for_installment = None
 
                 _save_single_transaction_to_firestore_internal(
                     user, current_installment_date, transaction_type, category, 
-                    installment_description, amount_per_installment, current_payment_status
+                    installment_description, amount_per_installment, current_payment_status_for_installment
                 )
             st.success(f"{num_installments} parcelas de '{category}' adicionadas com sucesso!")
         else:
@@ -159,9 +183,8 @@ def get_transactions_df():
             data["id"] = trans_doc.id
             if 'date' in data and isinstance(data['date'], datetime.datetime):
                 data['date'] = data['date'].date() 
-            # Garante que o campo status_pagamento existe para despesas, default para Pendente se não existir (dados antigos)
             if data.get('type') == "Despesa" and 'status_pagamento' not in data:
-                data['status_pagamento'] = "Pendente"
+                data['status_pagamento'] = "Pendente" # Default para dados antigos
             transactions_list.append(data)
         
         df = pd.DataFrame(transactions_list)
@@ -194,7 +217,6 @@ def update_transaction_in_firestore(transaction_id, data_to_update):
     st.rerun()
 
 def update_payment_status_in_firestore(transaction_id, new_status):
-    """Atualiza apenas o status de pagamento de uma despesa."""
     if not db: st.error("Conexão com o banco de dados não estabelecida."); return
     try:
         db.collection("transactions").document(transaction_id).update({
@@ -250,13 +272,12 @@ def display_edit_transaction_form():
                 }
                 if edited_type == "Despesa":
                     data_to_update["status_pagamento"] = edited_payment_status
-                elif "status_pagamento" in data_to_update: # Remove se não for despesa
+                elif "status_pagamento" in data_to_update: 
                     del data_to_update["status_pagamento"]
                 update_transaction_in_firestore(transaction_id, data_to_update)
         
         if cols[1].form_submit_button("Cancelar Edição", type="secondary"):
-            st.session_state.editing_transaction = None
-            st.rerun()
+            st.session_state.editing_transaction = None; st.rerun()
     st.markdown("---")
 
 def render_transaction_rows(df_transactions, list_id_prefix=""):
@@ -264,12 +285,13 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
 
     st.markdown(
         """<style>.transaction-row > div { display: flex; align-items: center; }
-           .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; }</style>""", 
+           .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; margin-top: 5px !important; }
+           .status-text { font-size: 0.85rem; color: #555; margin-bottom: -2px; display: block; text-align: center;}
+        </style>""", 
         unsafe_allow_html=True
     )
     
-    # Adiciona coluna para Status do Pagamento
-    header_cols = st.columns((2, 2, 2, 3, 2, 2, 1, 1)) # Ajustado para nova coluna
+    header_cols = st.columns((2, 2, 2, 3, 2, 2, 1, 1)) 
     fields = ['Data', 'Tipo', 'Categoria', 'Descrição', 'Valor (R$)', 'Status Pag.', 'Editar', 'Excluir']
     for col, field_name in zip(header_cols, fields):
         col.markdown(f"**{field_name}**")
@@ -284,33 +306,30 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         is_expense = row.get('type') == "Despesa"
         payment_status = row.get('status_pagamento', "Pendente") if is_expense else ""
 
-        cols = st.columns((2, 2, 2, 3, 2, 2, 1, 1), gap="small") # Ajustado para nova coluna
+        cols = st.columns((2, 2, 2, 3, 2, 2, 1, 1), gap="small") 
         
         cols[0].write(row['date'].strftime('%d/%m/%Y') if pd.notnull(row['date']) else 'N/A')
         cols[1].write(row['type'])
         cols[2].write(row['category'])
-        cols[3].write(row.get('description', '')[:25] + '...' if len(row.get('description', '')) > 25 else row.get('description', '')) # Descrição mais curta
+        cols[3].write(row.get('description', '')[:25] + '...' if len(row.get('description', '')) > 25 else row.get('description', '')) 
         cols[4].write(f"R$ {row['amount']:.2f}")
 
-        # Coluna de Status do Pagamento
         status_col_content = cols[5]
         if is_expense and can_edit_delete:
-            button_label = "Marcar como Pago" if payment_status == "Pendente" else "Marcar como Pendente"
+            status_col_content.markdown(f"<span class='status-text'>Status: {payment_status}</span>", unsafe_allow_html=True)
+            button_label = "Pagar" if payment_status == "Pendente" else "Pendente"
             new_status_on_click = "Pago" if payment_status == "Pendente" else "Pendente"
-            if status_col_content.button(button_label, key=f"{list_id_prefix}_status_{trans_id}", help=f"Status atual: {payment_status}"):
+            if status_col_content.button(button_label, key=f"{list_id_prefix}_status_{trans_id}", help=f"Clique para marcar como {new_status_on_click}"):
                 update_payment_status_in_firestore(trans_id, new_status_on_click)
-            status_col_content.caption(f"({payment_status})") # Mostra status atual abaixo do botão
         elif is_expense:
             status_col_content.write(payment_status)
         else:
-            status_col_content.write("-") # Para Receitas/Investimentos
+            status_col_content.write("-") 
 
-        # Colunas Editar e Excluir
         if can_edit_delete:
             if cols[6].button("✏️", key=f"{list_id_prefix}_edit_{trans_id}", help="Editar"):
                 st.session_state.editing_transaction = {'id': trans_id, 'data': row_data_for_edit}
-                st.session_state.pending_delete_id = None 
-                st.rerun()
+                st.session_state.pending_delete_id = None; st.rerun()
             
             if st.session_state.get('pending_delete_id') == trans_id:
                 confirm_cols = cols[7].columns([1,1])
@@ -355,7 +374,7 @@ def page_log_transaction():
         description_val = st.text_area("Descrição (Opcional)", key="form_trans_desc")
         amount_val = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="form_trans_amount")
         
-        payment_status_val = "Pendente" # Default
+        payment_status_val = "Pendente" 
         if transaction_type_val == "Despesa":
             payment_status_val = st.radio("Status do Pagamento:", PAYMENT_STATUS_OPTIONS, index=0, horizontal=True, key="form_payment_status")
 
@@ -372,7 +391,7 @@ def page_log_transaction():
             add_transaction(st.session_state.user, transaction_date_val, transaction_type_val, 
                             category_val, description_val, amount_val,
                             is_recurring_flag_val, num_installments_val,
-                            payment_status_val if transaction_type_val == "Despesa" else None) # Passa o status
+                            payment_status_val if transaction_type_val == "Despesa" else None) 
     
     st.markdown("---"); st.subheader("Últimas Transações Lançadas por Você:")
     all_trans_df = get_transactions_df()
@@ -382,12 +401,10 @@ def page_log_transaction():
     else: st.info("Nenhuma transação registrada no banco de dados.")
 
 def display_summary_charts_and_data(df_period, df_full_history_for_user_or_couple, selected_month_internal, title_prefix=""):
-    # ... (código dos gráficos e resumo numérico - sem alteração direta aqui, mas o df_period já inclui o status)
     if df_period.empty:
         st.info(f"{title_prefix}Nenhuma transação encontrada para {format_month_year_for_display(selected_month_internal)}.")
     else:
         receitas = df_period[df_period['type'] == 'Receita']['amount'].sum()
-        # Despesas totais (pagas e pendentes) para o resumo numérico e gráfico de pizza
         despesas_total = df_period[df_period['type'] == 'Despesa']['amount'].sum()
         investimentos_periodo = df_period[df_period['type'] == 'Investimento']['amount'].sum() 
         saldo = receitas - (despesas_total + investimentos_periodo) 
@@ -395,7 +412,7 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
         st.subheader(f"{title_prefix}Resumo de {format_month_year_for_display(selected_month_internal)}")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Receitas", f"R$ {receitas:,.2f}")
-        col2.metric("Despesas", f"R$ {despesas_total:,.2f}") # Mostra despesas totais
+        col2.metric("Despesas", f"R$ {despesas_total:,.2f}") 
         col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") 
         col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
