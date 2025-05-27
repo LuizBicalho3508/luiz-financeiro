@@ -43,6 +43,9 @@ def initialize_app_session_state():
         st.session_state.pending_delete_id = None 
     if 'transaction_mode_selection_key' not in st.session_state:
         st.session_state.transaction_mode_selection_key = "Único"
+    # Rastreia a última página do menu principal visitada para resetar o selectbox dos resumos
+    if 'last_main_menu_selection' not in st.session_state:
+        st.session_state.last_main_menu_selection = None
 
 
 initialize_app_session_state()
@@ -52,6 +55,7 @@ def login_user(username, password):
     if username in USERS and USERS[username] == password:
         st.session_state.logged_in = True
         st.session_state.user = username
+        st.session_state.last_main_menu_selection = None # Reseta ao fazer login
         st.rerun()
     else:
         st.error("Usuário ou senha incorretos.")
@@ -60,7 +64,8 @@ def logout_user():
     st.session_state.logged_in = False
     st.session_state.user = None
     st.session_state.editing_transaction = None 
-    st.session_state.pending_delete_id = None   
+    st.session_state.pending_delete_id = None
+    st.session_state.last_main_menu_selection = None # Reseta ao fazer logout
     st.rerun()
 
 # --- Funções CRUD para Transações com Firestore ---
@@ -391,6 +396,15 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
 def page_my_summary():
     st.header(f"Meu Resumo Financeiro - {st.session_state.user}")
     display_edit_transaction_form() 
+
+    # Lógica para resetar o selectbox se a página do menu mudou
+    selectbox_key = "my_summary_month_select"
+    current_menu_page = st.session_state.get("main_menu_selection") # A página atual do menu
+    if st.session_state.get("last_main_menu_selection") != current_menu_page:
+        if selectbox_key in st.session_state:
+            del st.session_state[selectbox_key]
+    # st.session_state.last_main_menu_selection será atualizado no final da main_app
+
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação no banco de dados. Comece adicionando algumas!")
@@ -409,16 +423,18 @@ def page_my_summary():
         st.info("Nenhuma transação sua com data válida para resumo.")
         return
     
-    # Define o índice padrão para o selectbox
     current_month_str = datetime.date.today().strftime("%Y-%m")
     default_index = 0
-    if current_month_str in available_months_user:
-        default_index = available_months_user.index(current_month_str)
+    if available_months_user: # Garante que a lista não está vazia antes de tentar .index()
+        try:
+            default_index = available_months_user.index(current_month_str)
+        except ValueError:
+            default_index = 0 # Mês atual não encontrado, usa o mais recente
         
     selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", 
                                   available_months_user, 
-                                  index=default_index, # Define o mês atual como padrão se existir
-                                  key="my_summary_month_select")
+                                  index=default_index, 
+                                  key=selectbox_key) # Usa a selectbox_key definida
     if selected_month:
         df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month]
         display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
@@ -426,6 +442,15 @@ def page_my_summary():
 def page_couple_summary():
     st.header("Resumo Financeiro do Casal")
     display_edit_transaction_form() 
+
+    # Lógica para resetar o selectbox se a página do menu mudou
+    selectbox_key = "couple_summary_month_select"
+    current_menu_page = st.session_state.get("main_menu_selection") # A página atual do menu
+    if st.session_state.get("last_main_menu_selection") != current_menu_page:
+        if selectbox_key in st.session_state:
+            del st.session_state[selectbox_key]
+    # st.session_state.last_main_menu_selection será atualizado no final da main_app
+
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação registrada no banco de dados.")
@@ -439,16 +464,18 @@ def page_couple_summary():
         st.info("Nenhuma transação com data válida para resumo.")
         return
 
-    # Define o índice padrão para o selectbox
     current_month_str = datetime.date.today().strftime("%Y-%m")
     default_index = 0
-    if current_month_str in available_months_couple:
-        default_index = available_months_couple.index(current_month_str)
+    if available_months_couple: # Garante que a lista não está vazia
+        try:
+            default_index = available_months_couple.index(current_month_str)
+        except ValueError:
+            default_index = 0
 
     selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", 
                                   available_months_couple, 
-                                  index=default_index, # Define o mês atual como padrão se existir
-                                  key="couple_summary_month_select")
+                                  index=default_index, 
+                                  key=selectbox_key) # Usa a selectbox_key definida
     if selected_month:
         df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month]
         display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
@@ -461,12 +488,19 @@ def main_app():
         "📊 Meu Resumo": page_my_summary,
         "💑 Resumo do Casal": page_couple_summary
     }
+    # A seleção do menu é armazenada em st.session_state.main_menu_selection
     selection = st.sidebar.radio("Menu", list(menu_options.keys()), key="main_menu_selection")
+    
     st.sidebar.markdown("---")
     if st.sidebar.button("Logout"):
         logout_user()
+
     page_function = menu_options[selection]
     page_function() 
+
+    # Atualiza a última página visitada DEPOIS que a função da página foi executada
+    st.session_state.last_main_menu_selection = selection
+    
     st.sidebar.markdown("---")
     st.sidebar.info("Dados armazenados no Firebase Firestore.")
 
