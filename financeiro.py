@@ -404,11 +404,6 @@ def page_my_summary():
     selectbox_key = "my_summary_month_select"
     current_menu_page = st.session_state.get("main_menu_selection")
 
-    # Se navegou para esta página, remove a seleção anterior do selectbox para forçar o default
-    if st.session_state.get("last_main_menu_selection") != current_menu_page:
-        if selectbox_key in st.session_state:
-            del st.session_state[selectbox_key]
-
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação no banco de dados. Comece adicionando algumas!")
@@ -422,27 +417,40 @@ def page_my_summary():
     if 'date' in df_user_full_history.columns: 
          df_user_full_history['month_year'] = pd.to_datetime(df_user_full_history['date']).dt.strftime('%Y-%m')
 
-    available_months_user = sorted(df_user_full_history['month_year'].unique(), reverse=True)
-    if not available_months_user:
-        st.info("Nenhuma transação sua com data válida para resumo.")
-        return
-    
-    default_index = 0
+    # Prepara a lista de opções para o selectbox, garantindo que o mês atual esteja presente
     current_calendar_month_str = datetime.date.today().strftime("%Y-%m")
-    if current_calendar_month_str in available_months_user:
-        default_index = available_months_user.index(current_calendar_month_str)
-    elif available_months_user: # Se o mês atual não tem dados, e a lista não está vazia
-        default_index = 0 # Padrão para o mais recente
-        
+    available_months_with_data = sorted(list(df_user_full_history['month_year'].unique()), reverse=True)
+    
+    display_options = list(available_months_with_data)
+    if current_calendar_month_str not in display_options:
+        display_options.append(current_calendar_month_str)
+    display_options = sorted(list(set(display_options)), reverse=True) # Remove duplicados e ordena
+
+    if not display_options: # Caso não haja nenhum mês com dados e nem o mês atual (improvável)
+        st.info("Nenhum período disponível para seleção.")
+        return
+
+    # Define o valor padrão do selectbox
+    target_month_for_selectbox = current_calendar_month_str
+    
+    # Se estiver navegando para a página ou se o selectbox não tem valor, define o padrão
+    if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
+        st.session_state[selectbox_key] = target_month_for_selectbox
+    # Garante que o valor no estado da sessão é válido, senão usa o primeiro das opções
+    elif st.session_state.get(selectbox_key) not in display_options and display_options:
+         st.session_state[selectbox_key] = display_options[0]
+
+
     selected_month = st.selectbox(
         "Selecione o Mês/Ano para o resumo detalhado:", 
-        options=available_months_user, 
-        index=default_index, # Usa o índice calculado
-        key=selectbox_key
+        options=display_options, 
+        key=selectbox_key 
     )
     
-    if selected_month:
+    if selected_month: # selected_month agora deve ser o valor do st.session_state[selectbox_key]
         df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month]
+        # Note que df_period_user pode estar vazio se o mês atual foi selecionado mas não tem dados.
+        # A função display_summary_charts_and_data já lida com df_period vazio.
         display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
 
 def page_couple_summary():
@@ -452,10 +460,6 @@ def page_couple_summary():
     selectbox_key = "couple_summary_month_select"
     current_menu_page = st.session_state.get("main_menu_selection")
 
-    if st.session_state.get("last_main_menu_selection") != current_menu_page:
-        if selectbox_key in st.session_state:
-            del st.session_state[selectbox_key]
-
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação registrada no banco de dados.")
@@ -464,22 +468,29 @@ def page_couple_summary():
     if 'date' in df_all_transactions_system.columns: 
         df_all_transactions_system['month_year'] = pd.to_datetime(df_all_transactions_system['date']).dt.strftime('%Y-%m')
 
-    available_months_couple = sorted(df_all_transactions_system['month_year'].unique(), reverse=True)
-    if not available_months_couple:
-        st.info("Nenhuma transação com data válida para resumo.")
+    current_calendar_month_str = datetime.date.today().strftime("%Y-%m")
+    available_months_with_data = sorted(list(df_all_transactions_system['month_year'].unique()), reverse=True)
+    
+    display_options = list(available_months_with_data)
+    if current_calendar_month_str not in display_options:
+        display_options.append(current_calendar_month_str)
+    display_options = sorted(list(set(display_options)), reverse=True)
+
+    if not display_options:
+        st.info("Nenhum período disponível para seleção.")
         return
 
-    default_index = 0
-    current_calendar_month_str = datetime.date.today().strftime("%Y-%m")
-    if current_calendar_month_str in available_months_couple:
-        default_index = available_months_couple.index(current_calendar_month_str)
-    elif available_months_couple:
-        default_index = 0
+    target_month_for_selectbox = current_calendar_month_str
+
+    if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
+        st.session_state[selectbox_key] = target_month_for_selectbox
+    elif st.session_state.get(selectbox_key) not in display_options and display_options:
+        st.session_state[selectbox_key] = display_options[0]
+
 
     selected_month = st.selectbox(
         "Selecione o Mês/Ano para o resumo detalhado:", 
-        options=available_months_couple, 
-        index=default_index,
+        options=display_options, 
         key=selectbox_key
     )
     
