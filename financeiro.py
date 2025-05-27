@@ -10,6 +10,11 @@ import calendar
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
 
+PORTUGUESE_MONTHS = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+]
+
 # --- Inicialização do Firebase ---
 @st.cache_resource
 def initialize_firebase():
@@ -46,8 +51,18 @@ def initialize_app_session_state():
     if 'last_main_menu_selection' not in st.session_state:
         st.session_state.last_main_menu_selection = None
 
-
 initialize_app_session_state()
+
+# --- Funções Auxiliares de Formatação de Data ---
+def format_month_year_for_display(month_year_str): # "YYYY-MM"
+    """Converte 'YYYY-MM' para 'Nome do Mês de YYYY'."""
+    if not month_year_str or len(month_year_str) != 7 or month_year_str[4] != '-':
+        return month_year_str 
+    try:
+        year, month = map(int, month_year_str.split('-'))
+        return f"{PORTUGUESE_MONTHS[month-1]} de {year}"
+    except (ValueError, IndexError):
+        return month_year_str 
 
 # --- Funções de Autenticação ---
 def login_user(username, password):
@@ -65,7 +80,6 @@ def logout_user():
     st.session_state.editing_transaction = None 
     st.session_state.pending_delete_id = None
     st.session_state.last_main_menu_selection = None 
-    # Limpa os estados dos selectboxes dos resumos para forçar o default na próxima vez
     if "my_summary_month_select" in st.session_state:
         del st.session_state.my_summary_month_select
     if "couple_summary_month_select" in st.session_state:
@@ -417,41 +431,62 @@ def page_my_summary():
     if 'date' in df_user_full_history.columns: 
          df_user_full_history['month_year'] = pd.to_datetime(df_user_full_history['date']).dt.strftime('%Y-%m')
 
-    # Prepara a lista de opções para o selectbox, garantindo que o mês atual esteja presente
-    current_calendar_month_str = datetime.date.today().strftime("%Y-%m")
-    available_months_with_data = sorted(list(df_user_full_history['month_year'].unique()), reverse=True)
+    current_calendar_month_internal = datetime.date.today().strftime("%Y-%m")
+    available_months_internal = sorted(list(df_user_full_history['month_year'].unique()), reverse=True)
     
-    display_options = list(available_months_with_data)
-    if current_calendar_month_str not in display_options:
-        display_options.append(current_calendar_month_str)
-    display_options = sorted(list(set(display_options)), reverse=True) # Remove duplicados e ordena
+    # Cria a lista de opções para exibição e o mapa para conversão
+    display_options = []
+    internal_to_display_map = {} # YYYY-MM -> Nome Mês de YYYY
+    display_to_internal_map = {} # Nome Mês de YYYY -> YYYY-MM
 
-    if not display_options: # Caso não haja nenhum mês com dados e nem o mês atual (improvável)
+    # Adiciona todos os meses com dados
+    for month_internal in available_months_internal:
+        formatted_month = format_month_year_for_display(month_internal)
+        display_options.append(formatted_month)
+        internal_to_display_map[month_internal] = formatted_month
+        display_to_internal_map[formatted_month] = month_internal
+    
+    # Garante que o mês atual esteja nas opções de exibição
+    current_calendar_month_display = format_month_year_for_display(current_calendar_month_internal)
+    if current_calendar_month_display not in display_options:
+        display_options.append(current_calendar_month_display)
+        # Adiciona ao mapa se ainda não existir (caso não haja dados para o mês atual)
+        if current_calendar_month_internal not in internal_to_display_map:
+             internal_to_display_map[current_calendar_month_internal] = current_calendar_month_display
+             display_to_internal_map[current_calendar_month_display] = current_calendar_month_internal
+
+    display_options = sorted(list(set(display_options)), key=lambda x: display_to_internal_map.get(x, x), reverse=True)
+
+    if not display_options:
         st.info("Nenhum período disponível para seleção.")
         return
 
-    # Define o valor padrão do selectbox
-    target_month_for_selectbox = current_calendar_month_str
+    # Define o valor padrão do selectbox (valor de exibição)
+    default_display_value = current_calendar_month_display
     
-    # Se estiver navegando para a página ou se o selectbox não tem valor, define o padrão
     if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
-        st.session_state[selectbox_key] = target_month_for_selectbox
-    # Garante que o valor no estado da sessão é válido, senão usa o primeiro das opções
+        st.session_state[selectbox_key] = default_display_value
     elif st.session_state.get(selectbox_key) not in display_options and display_options:
          st.session_state[selectbox_key] = display_options[0]
 
-
-    selected_month = st.selectbox(
+    selected_month_display = st.selectbox(
         "Selecione o Mês/Ano para o resumo detalhado:", 
         options=display_options, 
         key=selectbox_key 
     )
     
-    if selected_month: # selected_month agora deve ser o valor do st.session_state[selectbox_key]
-        df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month]
-        # Note que df_period_user pode estar vazio se o mês atual foi selecionado mas não tem dados.
-        # A função display_summary_charts_and_data já lida com df_period vazio.
+    selected_month_internal = display_to_internal_map.get(selected_month_display)
+
+    if selected_month_internal:
+        df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month_internal]
         display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
+    elif display_options : # Fallback se o selected_month_display não mapear (improvável)
+        st.warning("Mês selecionado não encontrado. Exibindo o mais recente.")
+        selected_month_internal_fallback = display_to_internal_map.get(display_options[0])
+        if selected_month_internal_fallback:
+            df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month_internal_fallback]
+            display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
+
 
 def page_couple_summary():
     st.header("Resumo Financeiro do Casal")
@@ -468,35 +503,57 @@ def page_couple_summary():
     if 'date' in df_all_transactions_system.columns: 
         df_all_transactions_system['month_year'] = pd.to_datetime(df_all_transactions_system['date']).dt.strftime('%Y-%m')
 
-    current_calendar_month_str = datetime.date.today().strftime("%Y-%m")
-    available_months_with_data = sorted(list(df_all_transactions_system['month_year'].unique()), reverse=True)
+    current_calendar_month_internal = datetime.date.today().strftime("%Y-%m")
+    available_months_internal = sorted(list(df_all_transactions_system['month_year'].unique()), reverse=True)
     
-    display_options = list(available_months_with_data)
-    if current_calendar_month_str not in display_options:
-        display_options.append(current_calendar_month_str)
-    display_options = sorted(list(set(display_options)), reverse=True)
+    display_options = []
+    internal_to_display_map = {}
+    display_to_internal_map = {}
+
+    for month_internal in available_months_internal:
+        formatted_month = format_month_year_for_display(month_internal)
+        display_options.append(formatted_month)
+        internal_to_display_map[month_internal] = formatted_month
+        display_to_internal_map[formatted_month] = month_internal
+    
+    current_calendar_month_display = format_month_year_for_display(current_calendar_month_internal)
+    if current_calendar_month_display not in display_options:
+        display_options.append(current_calendar_month_display)
+        if current_calendar_month_internal not in internal_to_display_map:
+             internal_to_display_map[current_calendar_month_internal] = current_calendar_month_display
+             display_to_internal_map[current_calendar_month_display] = current_calendar_month_internal
+             
+    display_options = sorted(list(set(display_options)), key=lambda x: display_to_internal_map.get(x, x), reverse=True)
 
     if not display_options:
         st.info("Nenhum período disponível para seleção.")
         return
 
-    target_month_for_selectbox = current_calendar_month_str
+    default_display_value = current_calendar_month_display
 
     if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
-        st.session_state[selectbox_key] = target_month_for_selectbox
+        st.session_state[selectbox_key] = default_display_value
     elif st.session_state.get(selectbox_key) not in display_options and display_options:
         st.session_state[selectbox_key] = display_options[0]
 
-
-    selected_month = st.selectbox(
+    selected_month_display = st.selectbox(
         "Selecione o Mês/Ano para o resumo detalhado:", 
         options=display_options, 
         key=selectbox_key
     )
     
-    if selected_month:
-        df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month]
+    selected_month_internal = display_to_internal_map.get(selected_month_display)
+
+    if selected_month_internal:
+        df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month_internal]
         display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
+    elif display_options:
+        st.warning("Mês selecionado não encontrado. Exibindo o mais recente.")
+        selected_month_internal_fallback = display_to_internal_map.get(display_options[0])
+        if selected_month_internal_fallback:
+            df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month_internal_fallback]
+            display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
+
 
 # --- Lógica Principal da Aplicação ---
 def main_app():
