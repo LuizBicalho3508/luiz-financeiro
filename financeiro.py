@@ -57,12 +57,34 @@ initialize_app_session_state()
 def format_month_year_for_display(month_year_str): # "YYYY-MM"
     """Converte 'YYYY-MM' para 'Nome do Mês de YYYY'."""
     if not month_year_str or len(month_year_str) != 7 or month_year_str[4] != '-':
-        return month_year_str 
+        return month_year_str # Retorna original se o formato for inválido
     try:
         year, month = map(int, month_year_str.split('-'))
+        if not (1 <= month <= 12):
+            return month_year_str # Mês inválido
         return f"{PORTUGUESE_MONTHS[month-1]} de {year}"
     except (ValueError, IndexError):
-        return month_year_str 
+        return month_year_str # Erro na conversão
+
+def parse_display_month_year(display_month_year_str): # "Nome do Mês de YYYY"
+    """Converte 'Nome do Mês de YYYY' de volta para 'YYYY-MM'."""
+    try:
+        parts = display_month_year_str.split(" de ")
+        if len(parts) != 2:
+            return None
+        month_name_pt = parts[0]
+        year_str = parts[1]
+        
+        if month_name_pt not in PORTUGUESE_MONTHS:
+            return None
+            
+        month_num = PORTUGUESE_MONTHS.index(month_name_pt) + 1
+        year_num = int(year_str)
+        
+        return f"{year_num:04d}-{month_num:02d}"
+    except Exception:
+        return None
+
 
 # --- Funções de Autenticação ---
 def login_user(username, password):
@@ -342,23 +364,23 @@ def page_log_transaction():
     else:
         st.info("Nenhuma transação registrada no banco de dados.")
 
-def display_summary_charts_and_data(df_period, df_full_history_for_user_or_couple, title_prefix=""):
+def display_summary_charts_and_data(df_period, df_full_history_for_user_or_couple, selected_month_internal, title_prefix=""):
     if df_period.empty:
-        st.info(f"{title_prefix}Nenhuma transação encontrada para o período selecionado.")
+        st.info(f"{title_prefix}Nenhuma transação encontrada para {format_month_year_for_display(selected_month_internal)}.")
     else:
         receitas = df_period[df_period['type'] == 'Receita']['amount'].sum()
         despesas = df_period[df_period['type'] == 'Despesa']['amount'].sum()
         investimentos_periodo = df_period[df_period['type'] == 'Investimento']['amount'].sum() 
         saldo = receitas - (despesas + investimentos_periodo) 
 
-        st.subheader(f"{title_prefix}Resumo do Mês Selecionado")
+        st.subheader(f"{title_prefix}Resumo de {format_month_year_for_display(selected_month_internal)}")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Receitas", f"R$ {receitas:,.2f}")
         col2.metric("Despesas", f"R$ {despesas:,.2f}")
         col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") 
         col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
-        st.subheader(f"{title_prefix}Composição Receita vs. Despesa (Mês Selecionado)")
+        st.subheader(f"{title_prefix}Composição Receita vs. Despesa ({format_month_year_for_display(selected_month_internal)})")
         chart_values, chart_names, chart_colors, chart_title = [], [], [], "Situação Financeira do Mês"
         if receitas == 0 and despesas == 0:
             st.info(f"{title_prefix}Sem dados de receita ou despesa para este período.")
@@ -382,40 +404,64 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
         elif not (receitas == 0 and despesas == 0) : st.info(f"{title_prefix}Dados insuficientes ou zerados para o gráfico.")
         st.markdown("---")
 
-    if not df_full_history_for_user_or_couple.empty:
-        st.subheader(f"{title_prefix}Histórico Mensal (Últimos 12 Meses de Dados)")
+    # Gráfico de Linha Histórico dinâmico
+    if not df_full_history_for_user_or_couple.empty and selected_month_internal:
+        st.subheader(f"{title_prefix}Histórico Mensal (12 Meses até {format_month_year_for_display(selected_month_internal)})")
+        
         df_history_copy = df_full_history_for_user_or_couple.copy()
         if 'date' in df_history_copy.columns:
              df_history_copy['month_year'] = pd.to_datetime(df_history_copy['date']).dt.strftime('%Y-%m')
-        available_months_sorted = sorted(df_history_copy['month_year'].unique(), reverse=True)
-        last_12_months = available_months_sorted[:12]
-        if last_12_months:
-            history_12m_df = df_history_copy[df_history_copy['month_year'].isin(last_12_months)]
-            history_12m_df_filtered = history_12m_df[history_12m_df['type'].isin(['Receita', 'Despesa'])]
-            if not history_12m_df_filtered.empty:
-                monthly_summary = history_12m_df_filtered.groupby(['month_year', 'type'])['amount'].sum().unstack(fill_value=0).reset_index()
-                if 'Receita' not in monthly_summary.columns: monthly_summary['Receita'] = 0
-                if 'Despesa' not in monthly_summary.columns: monthly_summary['Despesa'] = 0
-                monthly_summary = monthly_summary.sort_values(by='month_year')
-                fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
-                                           title='Receitas vs. Despesas Mensais',
-                                           labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'}, markers=True)
-                fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
-                st.plotly_chart(fig_line_history, use_container_width=True)
-            else: st.info(f"{title_prefix}Não há dados de Receita ou Despesa no histórico de 12 meses.")
-        else: st.info(f"{title_prefix}Não há dados suficientes para o histórico de 12 meses.")
-    else: st.info(f"{title_prefix}Nenhuma transação no histórico para exibir gráfico de linha.")
+        
+        all_available_months_sorted_chronologically = sorted(list(df_history_copy['month_year'].unique()))
+
+        try:
+            # Encontra o índice do mês selecionado na lista cronológica
+            end_index = all_available_months_sorted_chronologically.index(selected_month_internal)
+            # Calcula o índice de início para pegar os últimos 12 meses (ou menos se não houver dados suficientes)
+            start_index = max(0, end_index - 11) 
+            
+            months_for_history_chart = all_available_months_sorted_chronologically[start_index : end_index + 1]
+
+            if months_for_history_chart:
+                history_df_for_chart = df_history_copy[df_history_copy['month_year'].isin(months_for_history_chart)]
+                history_df_filtered = history_df_for_chart[history_df_for_chart['type'].isin(['Receita', 'Despesa'])]
+                
+                if not history_df_filtered.empty:
+                    monthly_summary = history_df_filtered.groupby(['month_year', 'type'])['amount'].sum().unstack(fill_value=0).reset_index()
+                    if 'Receita' not in monthly_summary.columns: monthly_summary['Receita'] = 0
+                    if 'Despesa' not in monthly_summary.columns: monthly_summary['Despesa'] = 0
+                    monthly_summary = monthly_summary.sort_values(by='month_year') # Garante a ordem correta para o gráfico
+
+                    fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
+                                               title='Receitas vs. Despesas Mensais',
+                                               labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'}, markers=True)
+                    fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
+                    st.plotly_chart(fig_line_history, use_container_width=True)
+                else: 
+                    st.info(f"{title_prefix}Não há dados de Receita ou Despesa no período de 12 meses até {format_month_year_for_display(selected_month_internal)}.")
+            else:
+                st.info(f"{title_prefix}Não há dados suficientes para o histórico de 12 meses até {format_month_year_for_display(selected_month_internal)}.")
+        except ValueError:
+            st.info(f"{title_prefix}Mês selecionado ({format_month_year_for_display(selected_month_internal)}) não encontrado nos dados históricos para o gráfico de linha.")
+    
+    elif not df_full_history_for_user_or_couple.empty: # Se selected_month_internal for None mas houver histórico
+        st.info(f"{title_prefix}Selecione um mês para ver o histórico de 12 meses correspondente.")
+    else: # Se não houver histórico nenhum
+        st.info(f"{title_prefix}Nenhuma transação no histórico para exibir gráfico de linha.")
+    
     st.markdown("---")
-    st.subheader(f"{title_prefix}Detalhes das Transações do Período Selecionado")
-    if not df_period.empty:
+    st.subheader(f"{title_prefix}Detalhes das Transações de {format_month_year_for_display(selected_month_internal) if selected_month_internal else 'Período Não Selecionado'}")
+    if not df_period.empty: # df_period já está filtrado para o selected_month_internal
         render_transaction_rows(df_period.sort_values(by="date", ascending=False), f"{title_prefix.lower().replace(' ', '_').replace('-', '')}_summary_period")
-    else: st.info(f"{title_prefix}Nenhuma transação para exibir detalhes neste período.")
+    elif selected_month_internal: # Se um mês foi selecionado mas não tem dados nele
+        st.info(f"{title_prefix}Nenhuma transação para exibir detalhes em {format_month_year_for_display(selected_month_internal)}.")
+    # Não mostra nada se nenhum mês foi selecionado e df_period está vazio
 
 def page_my_summary():
     st.header(f"Meu Resumo Financeiro - {st.session_state.user}")
     display_edit_transaction_form() 
 
-    selectbox_key = "my_summary_month_select"
+    selectbox_key = "my_summary_month_select" # Chave para o valor de EXIBIÇÃO
     current_menu_page = st.session_state.get("main_menu_selection")
 
     df_all_transactions_system = get_transactions_df() 
@@ -432,37 +478,26 @@ def page_my_summary():
          df_user_full_history['month_year'] = pd.to_datetime(df_user_full_history['date']).dt.strftime('%Y-%m')
 
     current_calendar_month_internal = datetime.date.today().strftime("%Y-%m")
-    available_months_internal = sorted(list(df_user_full_history['month_year'].unique()), reverse=True)
+    available_months_internal = sorted(list(df_user_full_history['month_year'].unique()), reverse=False) # Ordena cronologicamente para o mapa
     
-    # Cria a lista de opções para exibição e o mapa para conversão
     display_options = []
-    internal_to_display_map = {} # YYYY-MM -> Nome Mês de YYYY
-    display_to_internal_map = {} # Nome Mês de YYYY -> YYYY-MM
+    internal_to_display_map = {} 
+    display_to_internal_map = {} 
 
-    # Adiciona todos os meses com dados
-    for month_internal in available_months_internal:
+    all_possible_months_internal = set(available_months_internal)
+    all_possible_months_internal.add(current_calendar_month_internal) # Garante que o mês atual YYYY-MM está na lógica
+
+    for month_internal in sorted(list(all_possible_months_internal), reverse=True): # Cria opções de exibição ordenadas do mais novo para o mais velho
         formatted_month = format_month_year_for_display(month_internal)
         display_options.append(formatted_month)
         internal_to_display_map[month_internal] = formatted_month
         display_to_internal_map[formatted_month] = month_internal
     
-    # Garante que o mês atual esteja nas opções de exibição
-    current_calendar_month_display = format_month_year_for_display(current_calendar_month_internal)
-    if current_calendar_month_display not in display_options:
-        display_options.append(current_calendar_month_display)
-        # Adiciona ao mapa se ainda não existir (caso não haja dados para o mês atual)
-        if current_calendar_month_internal not in internal_to_display_map:
-             internal_to_display_map[current_calendar_month_internal] = current_calendar_month_display
-             display_to_internal_map[current_calendar_month_display] = current_calendar_month_internal
-
-    display_options = sorted(list(set(display_options)), key=lambda x: display_to_internal_map.get(x, x), reverse=True)
-
     if not display_options:
         st.info("Nenhum período disponível para seleção.")
         return
 
-    # Define o valor padrão do selectbox (valor de exibição)
-    default_display_value = current_calendar_month_display
+    default_display_value = format_month_year_for_display(current_calendar_month_internal)
     
     if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
         st.session_state[selectbox_key] = default_display_value
@@ -479,13 +514,13 @@ def page_my_summary():
 
     if selected_month_internal:
         df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month_internal]
-        display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
-    elif display_options : # Fallback se o selected_month_display não mapear (improvável)
-        st.warning("Mês selecionado não encontrado. Exibindo o mais recente.")
+        display_summary_charts_and_data(df_period_user, df_user_full_history, selected_month_internal, "Meu ")
+    elif display_options : 
+        st.warning("Mês selecionado não encontrado. Exibindo o mais recente disponível.")
         selected_month_internal_fallback = display_to_internal_map.get(display_options[0])
         if selected_month_internal_fallback:
             df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month_internal_fallback]
-            display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
+            display_summary_charts_and_data(df_period_user, df_user_full_history, selected_month_internal_fallback, "Meu ")
 
 
 def page_couple_summary():
@@ -504,32 +539,26 @@ def page_couple_summary():
         df_all_transactions_system['month_year'] = pd.to_datetime(df_all_transactions_system['date']).dt.strftime('%Y-%m')
 
     current_calendar_month_internal = datetime.date.today().strftime("%Y-%m")
-    available_months_internal = sorted(list(df_all_transactions_system['month_year'].unique()), reverse=True)
+    available_months_internal = sorted(list(df_all_transactions_system['month_year'].unique()), reverse=False)
     
     display_options = []
     internal_to_display_map = {}
     display_to_internal_map = {}
 
-    for month_internal in available_months_internal:
+    all_possible_months_internal = set(available_months_internal)
+    all_possible_months_internal.add(current_calendar_month_internal)
+
+    for month_internal in sorted(list(all_possible_months_internal), reverse=True):
         formatted_month = format_month_year_for_display(month_internal)
         display_options.append(formatted_month)
         internal_to_display_map[month_internal] = formatted_month
         display_to_internal_map[formatted_month] = month_internal
-    
-    current_calendar_month_display = format_month_year_for_display(current_calendar_month_internal)
-    if current_calendar_month_display not in display_options:
-        display_options.append(current_calendar_month_display)
-        if current_calendar_month_internal not in internal_to_display_map:
-             internal_to_display_map[current_calendar_month_internal] = current_calendar_month_display
-             display_to_internal_map[current_calendar_month_display] = current_calendar_month_internal
              
-    display_options = sorted(list(set(display_options)), key=lambda x: display_to_internal_map.get(x, x), reverse=True)
-
     if not display_options:
         st.info("Nenhum período disponível para seleção.")
         return
 
-    default_display_value = current_calendar_month_display
+    default_display_value = format_month_year_for_display(current_calendar_month_internal)
 
     if st.session_state.get("last_main_menu_selection") != current_menu_page or selectbox_key not in st.session_state:
         st.session_state[selectbox_key] = default_display_value
@@ -546,13 +575,13 @@ def page_couple_summary():
 
     if selected_month_internal:
         df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month_internal]
-        display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
+        display_summary_charts_and_data(df_period_couple, df_all_transactions_system, selected_month_internal, "Casal - ")
     elif display_options:
-        st.warning("Mês selecionado não encontrado. Exibindo o mais recente.")
+        st.warning("Mês selecionado não encontrado. Exibindo o mais recente disponível.")
         selected_month_internal_fallback = display_to_internal_map.get(display_options[0])
         if selected_month_internal_fallback:
             df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month_internal_fallback]
-            display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
+            display_summary_charts_and_data(df_period_couple, df_all_transactions_system, selected_month_internal_fallback, "Casal - ")
 
 
 # --- Lógica Principal da Aplicação ---
