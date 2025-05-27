@@ -5,7 +5,7 @@ import plotly.express as px
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
-import calendar # Adicionado para cálculo de datas de parcelas
+import calendar 
 
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
@@ -38,10 +38,9 @@ def initialize_app_session_state():
     if 'user' not in st.session_state:
         st.session_state.user = None
     if 'editing_transaction' not in st.session_state:
-        st.session_state.editing_transaction = None # {'id': trans_id, 'data': trans_data}
+        st.session_state.editing_transaction = None 
     if 'pending_delete_id' not in st.session_state:
-        st.session_state.pending_delete_id = None # trans_id
-    # Inicializa a chave para o radio button de modo de transação se não existir
+        st.session_state.pending_delete_id = None 
     if 'transaction_mode_selection_key' not in st.session_state:
         st.session_state.transaction_mode_selection_key = "Único"
 
@@ -67,22 +66,16 @@ def logout_user():
 # --- Funções CRUD para Transações com Firestore ---
 
 def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_type, category, description, amount):
-    """Helper interno para salvar um único documento de transação no Firestore. Assume que 'db' está disponível."""
     timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
-    doc_ref = db.collection("transactions").document() # Firestore gera ID automaticamente
+    doc_ref = db.collection("transactions").document() 
     doc_ref.set({
-        "user": user,
-        "date": timestamp_obj, 
-        "type": transaction_type,
-        "category": category.strip().capitalize(),
-        "description": description.strip(),
-        "amount": float(amount), 
-        "month_year": date_obj.strftime("%Y-%m"), 
+        "user": user, "date": timestamp_obj, "type": transaction_type,
+        "category": category.strip().capitalize(), "description": description.strip(),
+        "amount": float(amount), "month_year": date_obj.strftime("%Y-%m"), 
         "created_at": firestore.SERVER_TIMESTAMP 
     })
 
 def add_transaction(user, date_obj, transaction_type, category, description, amount, is_recurring, num_installments):
-    """Adiciona uma transação única ou uma série de transações parceladas."""
     if not db:
         st.error("Conexão com o banco de dados não estabelecida.")
         return
@@ -92,21 +85,16 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
 
     try:
         if is_recurring and num_installments > 1:
-            original_description = description # Salva a descrição original
+            original_description = description 
             amount_per_installment = amount 
 
             for i in range(num_installments):
                 current_month_offset = i 
-                
                 year_of_installment = date_obj.year + (date_obj.month - 1 + current_month_offset) // 12
                 month_of_installment = (date_obj.month - 1 + current_month_offset) % 12 + 1
-                
                 day_of_installment = min(date_obj.day, calendar.monthrange(year_of_installment, month_of_installment)[1])
-                
                 current_installment_date = datetime.date(year_of_installment, month_of_installment, day_of_installment)
-
                 installment_description = f"{original_description} (Parcela {i+1}/{num_installments})" if original_description else f"Parcela {i+1}/{num_installments} de {category}"
-                
                 _save_single_transaction_to_firestore_internal(
                     user, current_installment_date, transaction_type, category, 
                     installment_description, amount_per_installment
@@ -116,7 +104,6 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
             final_description = description 
             if is_recurring and num_installments == 1: 
                  final_description = f"{description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
-
             _save_single_transaction_to_firestore_internal(
                 user, date_obj, transaction_type, category, final_description, amount
             )
@@ -143,7 +130,6 @@ def get_transactions_df():
         df = pd.DataFrame(transactions_list)
         if df.empty:
              return pd.DataFrame(columns=["id", "user", "date", "type", "category", "description", "amount", "month_year"])
-
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
         if 'amount' in df.columns:
@@ -205,11 +191,9 @@ def display_edit_transaction_form():
 
     with st.form(key=f"edit_form_{transaction_id}"):
         edited_date = st.date_input("Data", value=current_date_val, key=f"edit_date_{transaction_id}")
-        
         tipos = ["Receita", "Despesa", "Investimento"]
         current_type_idx = tipos.index(current_data.get('type', "Despesa")) if current_data.get('type') in tipos else 1
         edited_type = st.selectbox("Tipo", tipos, index=current_type_idx, key=f"edit_type_{transaction_id}")
-        
         edited_category = st.text_input("Categoria", value=current_data.get('category', ''), key=f"edit_category_{transaction_id}")
         edited_description = st.text_area("Descrição", value=current_data.get('description', ''), key=f"edit_desc_{transaction_id}")
         edited_amount = st.number_input("Valor (R$)", value=float(current_data.get('amount', 0.0)),
@@ -221,16 +205,12 @@ def display_edit_transaction_form():
                 st.warning("Categoria e valor positivo são obrigatórios.")
             else:
                 data_to_update = {
-                    "user": current_data.get('user'), 
-                    "date": datetime.datetime.combine(edited_date, datetime.datetime.min.time()),
-                    "type": edited_type,
-                    "category": edited_category.strip().capitalize(),
-                    "description": edited_description.strip(),
-                    "amount": float(edited_amount),
+                    "user": current_data.get('user'), "date": datetime.datetime.combine(edited_date, datetime.datetime.min.time()),
+                    "type": edited_type, "category": edited_category.strip().capitalize(),
+                    "description": edited_description.strip(), "amount": float(edited_amount),
                     "month_year": edited_date.strftime("%Y-%m")
                 }
                 update_transaction_in_firestore(transaction_id, data_to_update)
-        
         if cols[1].form_submit_button("Cancelar Edição", type="secondary"):
             st.session_state.editing_transaction = None
             st.rerun()
@@ -242,14 +222,10 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         return
 
     st.markdown(
-        """
-        <style>
-            .transaction-row > div { display: flex; align-items: center; }
-            .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; }
-        </style>
-        """, unsafe_allow_html=True
+        """<style>.transaction-row > div { display: flex; align-items: center; }
+           .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; }</style>""", 
+        unsafe_allow_html=True
     )
-    
     header_cols = st.columns((3, 2, 2, 3, 2, 1, 1)) 
     fields = ['Data', 'Tipo', 'Categoria', 'Descrição', 'Valor (R$)', 'Editar', 'Excluir']
     for col, field_name in zip(header_cols, fields):
@@ -260,11 +236,8 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         row_data_for_edit = row.to_dict()
         if isinstance(row_data_for_edit.get('date'), pd.Timestamp):
             row_data_for_edit['date'] = row_data_for_edit['date'].date()
-        
         can_edit_delete = row.get('user') == st.session_state.user
-
         cols = st.columns((3, 2, 2, 3, 2, 1, 1), gap="small")
-        
         cols[0].write(row['date'].strftime('%d/%m/%Y') if pd.notnull(row['date']) else 'N/A')
         cols[1].write(row['type'])
         cols[2].write(row['category'])
@@ -276,7 +249,6 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
                 st.session_state.editing_transaction = {'id': trans_id, 'data': row_data_for_edit}
                 st.session_state.pending_delete_id = None 
                 st.rerun()
-            
             if st.session_state.get('pending_delete_id') == trans_id:
                 confirm_cols = cols[6].columns([1,1])
                 if confirm_cols[0].button("✅", key=f"{list_id_prefix}_confirmdel_{trans_id}", help="Confirmar Exclusão"):
@@ -294,7 +266,6 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
             cols[6].write("") 
     st.markdown("---")
 
-
 # --- Páginas da Aplicação ---
 def page_login():
     st.title("Controle Financeiro do Casal")
@@ -308,21 +279,11 @@ def page_login():
 def page_log_transaction():
     st.header(f"Olá, {st.session_state.user}! Registre uma nova transação:")
     display_edit_transaction_form() 
-
-    # Radio button OUTSIDE the form
-    # Its value will be in st.session_state.transaction_mode_selection_key
-    # Streamlit automatically reruns the script when this radio's value changes.
-    st.radio(
-        "Tipo de Lançamento:",
-        ("Único", "Parcelado"),
-        horizontal=True,
-        key="transaction_mode_selection_key" # This key stores the selection in st.session_state
-    )
+    st.radio("Tipo de Lançamento:", ("Único", "Parcelado"), horizontal=True, key="transaction_mode_selection_key")
 
     with st.form("transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            # These widgets are part of the form
             transaction_date_val = st.date_input("Data da Transação (ou 1ª Parcela)", datetime.date.today(), key="form_trans_date")
             transaction_type_val = st.selectbox("Tipo", ["Receita", "Despesa", "Investimento"], key="form_trans_type")
         with col2:
@@ -331,45 +292,24 @@ def page_log_transaction():
                 "Despesa": ["Moradia", "Alimentação", "Transporte", "Saúde", "Lazer", "Educação", "Vestuário", "Contas", "Outros"],
                 "Investimento": ["Ações", "Fundos Imobiliários", "Renda Fixa", "Criptomoedas", "Outros"]
             }
-            category_options = common_categories.get(transaction_type_val, ["Outros"]) # Uses current value of selectbox
+            category_options = common_categories.get(transaction_type_val, ["Outros"]) 
             category_val = st.text_input("Categoria (ex: Salário, Alimentação, Ações)", key="form_trans_category", placeholder="Ou digite uma nova")
             st.caption(f"Sugestões: {', '.join(category_options)}")
-            
         description_val = st.text_area("Descrição (Opcional)", key="form_trans_desc")
         amount_val = st.number_input("Valor (R$) (por parcela, se recorrente)", min_value=0.01, format="%.2f", step=0.01, key="form_trans_amount")
-        
         st.markdown("---") 
-        
         num_installments_val = 1
         is_recurring_flag_val = False
-
-        # Conditional display based on the radio button's state (which is outside the form)
-        # Access the radio's state via st.session_state
         if st.session_state.transaction_mode_selection_key == "Parcelado":
             is_recurring_flag_val = True
-            # Preserves the number input value if user toggles radio button
-            num_installments_val = st.number_input("Número Total de Parcelas", 
-                                                   min_value=1, 
+            num_installments_val = st.number_input("Número Total de Parcelas", min_value=1, 
                                                    value=st.session_state.get("form_num_installments_val", 2), 
-                                                   step=1, 
-                                                   key="form_num_installments_val")
-        
+                                                   step=1, key="form_num_installments_val")
         submitted = st.form_submit_button("Adicionar Transação")
-        
         if submitted:
-            # A linha que causava o erro foi removida daqui.
-            # O valor de num_installments_val já está correto e será usado.
-            add_transaction(
-                st.session_state.user, 
-                transaction_date_val, 
-                transaction_type_val, 
-                category_val, 
-                description_val, 
-                amount_val,
-                is_recurring_flag_val, 
-                num_installments_val 
-            )
-    
+            add_transaction(st.session_state.user, transaction_date_val, transaction_type_val, 
+                            category_val, description_val, amount_val,
+                            is_recurring_flag_val, num_installments_val)
     st.markdown("---")
     st.subheader("Últimas Transações Lançadas por Você:")
     all_trans_df = get_transactions_df()
@@ -395,104 +335,62 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
         col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") 
         col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
-
         st.subheader(f"{title_prefix}Composição Receita vs. Despesa (Mês Selecionado)")
-        
-        chart_values = []
-        chart_names = []
-        chart_colors = []
-        chart_title = "Situação Financeira do Mês"
-
+        chart_values, chart_names, chart_colors, chart_title = [], [], [], "Situação Financeira do Mês"
         if receitas == 0 and despesas == 0:
             st.info(f"{title_prefix}Sem dados de receita ou despesa para este período.")
         elif receitas == 0 and despesas > 0:
-            chart_values = [despesas]
-            chart_names = ['Despesas (Sem Receita)']
-            chart_colors = ['crimson']
+            chart_values, chart_names, chart_colors = [despesas], ['Despesas (Sem Receita)'], ['crimson']
             chart_title = "Situação Financeira: Déficit (Sem Receita)"
         elif receitas > 0:
             if despesas <= receitas:
-                chart_values = [despesas, receitas - despesas]
-                chart_names = ['Despesas Cobertas', 'Saldo Positivo da Receita']
-                chart_colors = ['sandybrown', 'lightgreen'] 
+                chart_values, chart_names, chart_colors = [despesas, receitas - despesas], ['Despesas Cobertas', 'Saldo Positivo da Receita'], ['sandybrown', 'lightgreen'] 
                 chart_title = "Receita vs. Despesa: Saldo Positivo"
-                if despesas == 0 and (receitas - despesas) == 0: 
-                    pass
-                elif despesas == 0 : 
-                     chart_values = [receitas - despesas]
-                     chart_names = ['Saldo Positivo da Receita']
-                     chart_colors = ['lightgreen']
-                elif (receitas - despesas) == 0: 
-                     chart_values = [despesas]
-                     chart_names = ['Despesas (Cobriram 100% da Receita)']
-                     chart_colors = ['sandybrown']
+                if despesas == 0 and (receitas - despesas) == 0: pass
+                elif despesas == 0 : chart_values, chart_names, chart_colors = [receitas - despesas], ['Saldo Positivo da Receita'], ['lightgreen']
+                elif (receitas - despesas) == 0: chart_values, chart_names, chart_colors = [despesas], ['Despesas (Cobriram 100% da Receita)'], ['sandybrown']
             else: 
-                chart_values = [receitas, despesas - receitas] 
-                chart_names = ['Receita (Totalmente Coberta por Despesas)', 'Despesa Excedente (Déficit)']
-                chart_colors = ['lightcoral', 'crimson'] 
+                chart_values, chart_names, chart_colors = [receitas, despesas - receitas], ['Receita (Coberta)', 'Despesa Excedente (Déficit)'], ['lightcoral', 'crimson'] 
                 chart_title = "Receita vs. Despesa: Déficit"
-        
         if chart_values and sum(chart_values) > 0: 
-            fig_comp = px.pie(values=chart_values, 
-                                names=chart_names, 
-                                title=chart_title,
-                                color_discrete_sequence=chart_colors)
+            fig_comp = px.pie(values=chart_values, names=chart_names, title=chart_title, color_discrete_sequence=chart_colors)
             fig_comp.update_traces(textposition='inside', textinfo='percent+label+value', hole=.3 if len(chart_values)>1 else 0)
             st.plotly_chart(fig_comp, use_container_width=True)
-        elif not (receitas == 0 and despesas == 0) : 
-            st.info(f"{title_prefix}Dados insuficientes ou zerados para o gráfico de pizza de composição.")
-        
+        elif not (receitas == 0 and despesas == 0) : st.info(f"{title_prefix}Dados insuficientes ou zerados para o gráfico.")
         st.markdown("---")
 
     if not df_full_history_for_user_or_couple.empty:
         st.subheader(f"{title_prefix}Histórico Mensal (Últimos 12 Meses de Dados)")
-        
         df_history_copy = df_full_history_for_user_or_couple.copy()
         if 'date' in df_history_copy.columns:
              df_history_copy['month_year'] = pd.to_datetime(df_history_copy['date']).dt.strftime('%Y-%m')
-        
         available_months_sorted = sorted(df_history_copy['month_year'].unique(), reverse=True)
         last_12_months = available_months_sorted[:12]
-
         if last_12_months:
             history_12m_df = df_history_copy[df_history_copy['month_year'].isin(last_12_months)]
             history_12m_df_filtered = history_12m_df[history_12m_df['type'].isin(['Receita', 'Despesa'])]
-            
             if not history_12m_df_filtered.empty:
                 monthly_summary = history_12m_df_filtered.groupby(['month_year', 'type'])['amount'].sum().unstack(fill_value=0).reset_index()
-                
-                if 'Receita' not in monthly_summary.columns:
-                    monthly_summary['Receita'] = 0
-                if 'Despesa' not in monthly_summary.columns:
-                    monthly_summary['Despesa'] = 0
-                
+                if 'Receita' not in monthly_summary.columns: monthly_summary['Receita'] = 0
+                if 'Despesa' not in monthly_summary.columns: monthly_summary['Despesa'] = 0
                 monthly_summary = monthly_summary.sort_values(by='month_year')
-
                 fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
                                            title='Receitas vs. Despesas Mensais',
-                                           labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'},
-                                           markers=True)
+                                           labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'}, markers=True)
                 fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
                 st.plotly_chart(fig_line_history, use_container_width=True)
-            else:
-                st.info(f"{title_prefix}Não há dados de Receita ou Despesa no histórico de 12 meses.")
-        else:
-            st.info(f"{title_prefix}Não há dados suficientes para o histórico de 12 meses.")
-    else:
-        st.info(f"{title_prefix}Nenhuma transação no histórico para exibir gráfico de linha.")
-    
+            else: st.info(f"{title_prefix}Não há dados de Receita ou Despesa no histórico de 12 meses.")
+        else: st.info(f"{title_prefix}Não há dados suficientes para o histórico de 12 meses.")
+    else: st.info(f"{title_prefix}Nenhuma transação no histórico para exibir gráfico de linha.")
     st.markdown("---")
     st.subheader(f"{title_prefix}Detalhes das Transações do Período Selecionado")
     if not df_period.empty:
         render_transaction_rows(df_period.sort_values(by="date", ascending=False), f"{title_prefix.lower().replace(' ', '_').replace('-', '')}_summary_period")
-    else:
-        st.info(f"{title_prefix}Nenhuma transação para exibir detalhes neste período.")
-
+    else: st.info(f"{title_prefix}Nenhuma transação para exibir detalhes neste período.")
 
 def page_my_summary():
     st.header(f"Meu Resumo Financeiro - {st.session_state.user}")
     display_edit_transaction_form() 
-    
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação no banco de dados. Comece adicionando algumas!")
@@ -510,8 +408,17 @@ def page_my_summary():
     if not available_months_user:
         st.info("Nenhuma transação sua com data válida para resumo.")
         return
+    
+    # Define o índice padrão para o selectbox
+    current_month_str = datetime.date.today().strftime("%Y-%m")
+    default_index = 0
+    if current_month_str in available_months_user:
+        default_index = available_months_user.index(current_month_str)
         
-    selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", available_months_user, key="my_summary_month_select")
+    selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", 
+                                  available_months_user, 
+                                  index=default_index, # Define o mês atual como padrão se existir
+                                  key="my_summary_month_select")
     if selected_month:
         df_period_user = df_user_full_history[df_user_full_history['month_year'] == selected_month]
         display_summary_charts_and_data(df_period_user, df_user_full_history, "Meu ")
@@ -519,7 +426,6 @@ def page_my_summary():
 def page_couple_summary():
     st.header("Resumo Financeiro do Casal")
     display_edit_transaction_form() 
-
     df_all_transactions_system = get_transactions_df() 
     if df_all_transactions_system.empty:
         st.info("Nenhuma transação registrada no banco de dados.")
@@ -533,7 +439,16 @@ def page_couple_summary():
         st.info("Nenhuma transação com data válida para resumo.")
         return
 
-    selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", available_months_couple, key="couple_summary_month_select")
+    # Define o índice padrão para o selectbox
+    current_month_str = datetime.date.today().strftime("%Y-%m")
+    default_index = 0
+    if current_month_str in available_months_couple:
+        default_index = available_months_couple.index(current_month_str)
+
+    selected_month = st.selectbox("Selecione o Mês/Ano para o resumo detalhado:", 
+                                  available_months_couple, 
+                                  index=default_index, # Define o mês atual como padrão se existir
+                                  key="couple_summary_month_select")
     if selected_month:
         df_period_couple = df_all_transactions_system[df_all_transactions_system['month_year'] == selected_month]
         display_summary_charts_and_data(df_period_couple, df_all_transactions_system, "Casal - ")
@@ -547,14 +462,11 @@ def main_app():
         "💑 Resumo do Casal": page_couple_summary
     }
     selection = st.sidebar.radio("Menu", list(menu_options.keys()), key="main_menu_selection")
-    
     st.sidebar.markdown("---")
     if st.sidebar.button("Logout"):
         logout_user()
-
     page_function = menu_options[selection]
     page_function() 
-
     st.sidebar.markdown("---")
     st.sidebar.info("Dados armazenados no Firebase Firestore.")
 
