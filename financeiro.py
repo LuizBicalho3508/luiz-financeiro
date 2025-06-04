@@ -28,8 +28,10 @@ except locale.Error:
         locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252') # Windows
         LOCALE_SET_SUCCESS = True
     except locale.Error:
-        # Apenas um aviso, o fallback na função de formatação será usado
-        print("Aviso: Locale 'pt_BR.UTF-8' ou 'Portuguese_Brazil.1252' não encontrado. Usando formatação de moeda manual.")
+        if 'initial_locale_warning_shown' not in st.session_state: # Guarded warning
+            st.warning("Locale 'pt_BR' não pôde ser configurado. Usando formatação de moeda manual.")
+            st.session_state.initial_locale_warning_shown = True
+        LOCALE_SET_SUCCESS = False # Explicitamente define como False se ambas as tentativas falharem
 
 
 # --- Inicialização do Firebase ---
@@ -42,7 +44,7 @@ def initialize_firebase():
             if not firebase_creds_json_str:
                 st.error("Credenciais Firebase (FIREBASE_SERVICE_ACCOUNT_JSON) não encontradas nos Streamlit Secrets.")
                 st.info("Por favor, adicione suas credenciais Firebase JSON como um segredo chamado 'FIREBASE_SERVICE_ACCOUNT_JSON' nas configurações do seu app Streamlit Cloud.")
-                st.stop() # Para a execução se as credenciais não forem encontradas
+                st.stop() 
                 return None
             
             firebase_creds_dict = json.loads(firebase_creds_json_str)
@@ -51,13 +53,13 @@ def initialize_firebase():
         except Exception as e:
             st.error(f"Erro ao inicializar o Firebase: {e}")
             st.info("Verifique se as credenciais Firebase JSON estão corretas e no formato esperado.")
-            st.stop() # Para a execução em caso de erro
+            st.stop() 
             return None
     
     db_client = firestore.client()
     return db_client
 
-db = initialize_firebase() # Inicializa o cliente Firestore globalmente
+db = initialize_firebase() 
 
 # --- Inicialização do Estado da Sessão ---
 def initialize_app_session_state():
@@ -104,38 +106,39 @@ def parse_display_month_year(display_month_year_str): # "Nome do Mês de YYYY"
 
 def format_brazilian_currency(value):
     """Formata um valor numérico como moeda brasileira (R$)."""
-    global LOCALE_SET_SUCCESS # Acessa a variável global
+    global LOCALE_SET_SUCCESS
     if LOCALE_SET_SUCCESS:
         try:
-            # Tenta usar a formatação de locale se pt_BR foi definido com sucesso
-            return locale.currency(value, grouping=True, symbol='R$ ') # Adiciona espaço após R$
+            return locale.currency(value, grouping=True, symbol='R$ ') 
         except (locale.Error, ValueError):
-            # Se locale.currency falhar mesmo após LOCALE_SET_SUCCESS ser True, usa o fallback.
-            # Isso pode acontecer se o locale foi definido, mas algo ainda está errado.
-            LOCALE_SET_SUCCESS = False # Marca que o locale não está funcionando para evitar tentativas futuras.
-            if 'pt_BR_warning_shown' not in st.session_state:
-                st.warning("Falha ao usar formatação de moeda do locale. Usando formatação manual.")
-                st.session_state.pt_BR_warning_shown = True
+            LOCALE_SET_SUCCESS = False 
+            if 'pt_BR_runtime_warning_shown' not in st.session_state:
+                st.warning("Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
+                st.session_state.pt_BR_runtime_warning_shown = True
+            # Fall through to manual formatting
 
-    # Fallback manual se LOCALE_SET_SUCCESS for False ou se locale.currency() falhar
+    # Fallback manual
     try:
-        # Formatação manual para R$ 1.234.567,89
-        # Converte para string com 2 casas decimais, usando . como separador decimal temporário
-        s = f"{value:.2f}"
+        val_float = float(value) # Garante que é float
+        s = f"{val_float:.2f}"
         parts = s.split('.')
         integer_part = parts[0]
         decimal_part = parts[1] if len(parts) > 1 else "00"
         
-        # Adiciona separador de milhar
+        sign = ""
+        if integer_part.startswith('-'):
+            sign = "-"
+            integer_part = integer_part[1:]
+
         integer_part_with_thousands = ""
         for i, digit in enumerate(reversed(integer_part)):
             if i != 0 and i % 3 == 0:
                 integer_part_with_thousands = "." + integer_part_with_thousands
             integer_part_with_thousands = digit + integer_part_with_thousands
         
-        return f"R$ {integer_part_with_thousands},{decimal_part}"
-    except Exception: # Fallback ainda mais genérico se a formatação manual falhar
-        return f"R$ {value:.2f}" # Simples formatação com duas casas decimais
+        return f"R$ {sign}{integer_part_with_thousands},{decimal_part}" # Adicionado espaço após R$
+    except Exception: 
+        return f"R$ {value:.2f}" # Fallback mais simples
 
 
 # --- Funções de Autenticação ---
@@ -344,12 +347,12 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         cols[1].write(row['type'])
         cols[2].write(row['category'])
         cols[3].write(row.get('description', '')[:25] + '...' if len(row.get('description', '')) > 25 else row.get('description', '')) 
-        cols[4].write(format_brazilian_currency(row['amount'])) # Formata valor aqui também
+        cols[4].write(format_brazilian_currency(row['amount'])) 
 
         status_col_content = cols[5]
         if is_expense and can_edit_delete:
             status_col_content.markdown(f"<div class='status-text'>Status: {payment_status}</div>", unsafe_allow_html=True)
-            button_label = "Pagar" if payment_status == "Pendente" else "Pendente" # Texto do botão indica a ação
+            button_label = "Pagar" if payment_status == "Pendente" else "Pendente" 
             new_status_on_click = "Pago" if payment_status == "Pendente" else "Pendente"
             if status_col_content.button(button_label, key=f"{list_id_prefix}_status_{trans_id}", help=f"Clique para marcar como {new_status_on_click}"):
                 update_payment_status_in_firestore(trans_id, new_status_on_click)
