@@ -6,6 +6,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import calendar 
+import locale # Para formatação de moeda
 
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
@@ -17,38 +18,46 @@ PORTUGUESE_MONTHS = [
 
 PAYMENT_STATUS_OPTIONS = ["Pendente", "Pago"] # Opções de status
 
+# Tenta definir o locale para Português do Brasil para formatação de moeda
+try:
+    locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252') # Windows
+    except locale.Error:
+        st.warning("Locale 'pt_BR.UTF-8' ou 'Portuguese_Brazil.1252' não encontrado. A formatação de moeda pode não ser a ideal.")
+
+
 # --- Inicialização do Firebase ---
-@st.cache_resource
+@st.cache_resource # Cache para evitar reinicializações desnecessárias
 def initialize_firebase():
-    if not firebase_admin._apps:
+    """Inicializa a conexão com o Firebase usando as credenciais dos secrets."""
+    if not firebase_admin._apps: # Verifica se já foi inicializado
         try:
-            # Tenta carregar as credenciais dos secrets do Streamlit
             firebase_creds_json_str = st.secrets.get("FIREBASE_SERVICE_ACCOUNT_JSON")
             if not firebase_creds_json_str:
-                st.error("Credenciais da conta de serviço Firebase não encontradas nos Streamlit Secrets.")
+                st.error("Credenciais Firebase (FIREBASE_SERVICE_ACCOUNT_JSON) não encontradas nos Streamlit Secrets.")
                 st.info("Por favor, adicione suas credenciais Firebase JSON como um segredo chamado 'FIREBASE_SERVICE_ACCOUNT_JSON' nas configurações do seu app Streamlit Cloud.")
-                st.stop() # Para a execução se as credenciais não forem encontradas
+                st.stop()
                 return None
             
-            # Analisa a string JSON para um dicionário
             firebase_creds_dict = json.loads(firebase_creds_json_str)
-            
             cred = credentials.Certificate(firebase_creds_dict)
             firebase_admin.initialize_app(cred)
-            # st.success("Firebase inicializado com sucesso!") # Opcional: para depuração
         except Exception as e:
             st.error(f"Erro ao inicializar o Firebase: {e}")
             st.info("Verifique se as credenciais Firebase JSON estão corretas e no formato esperado.")
-            st.stop() # Para a execução em caso de erro
+            st.stop()
             return None
     
     db_client = firestore.client()
     return db_client
 
-db = initialize_firebase()
+db = initialize_firebase() # Inicializa o cliente Firestore globalmente
 
 # --- Inicialização do Estado da Sessão ---
 def initialize_app_session_state():
+    """Inicializa as variáveis de estado da sessão necessárias."""
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     if 'user' not in st.session_state:
@@ -64,7 +73,7 @@ def initialize_app_session_state():
 
 initialize_app_session_state()
 
-# --- Funções Auxiliares de Formatação de Data ---
+# --- Funções Auxiliares de Formatação ---
 def format_month_year_for_display(month_year_str): # "YYYY-MM"
     """Converte 'YYYY-MM' para 'Nome do Mês de YYYY'."""
     if not month_year_str or len(month_year_str) != 7 or month_year_str[4] != '-':
@@ -81,20 +90,21 @@ def parse_display_month_year(display_month_year_str): # "Nome do Mês de YYYY"
     """Converte 'Nome do Mês de YYYY' de volta para 'YYYY-MM'."""
     try:
         parts = display_month_year_str.split(" de ")
-        if len(parts) != 2:
-            return None # Formato inválido
-        month_name_pt = parts[0]
-        year_str = parts[1]
-        
-        if month_name_pt not in PORTUGUESE_MONTHS:
-            return None # Nome do mês inválido
-            
+        if len(parts) != 2: return None
+        month_name_pt, year_str = parts[0], parts[1]
+        if month_name_pt not in PORTUGUESE_MONTHS: return None
         month_num = PORTUGUESE_MONTHS.index(month_name_pt) + 1
-        year_num = int(year_str) # Converte ano para int
-        
-        return f"{year_num:04d}-{month_num:02d}" # Formata YYYY-MM
-    except Exception: # Captura erros de conversão ou índice
-        return None
+        year_num = int(year_str)
+        return f"{year_num:04d}-{month_num:02d}"
+    except Exception: return None
+
+def format_brazilian_currency(value):
+    """Formata um valor numérico como moeda brasileira (R$)."""
+    try:
+        # Usa a formatação de locale se pt_BR foi definido com sucesso
+        return locale.currency(value, grouping=True, symbol='R$')
+    except NameError: # Fallback se locale não estiver definido ou der erro
+        return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 # --- Funções de Autenticação ---
@@ -104,8 +114,7 @@ def login_user(username, password):
         st.session_state.user = username
         st.session_state.last_main_menu_selection = None 
         st.rerun()
-    else:
-        st.error("Usuário ou senha incorretos.")
+    else: st.error("Usuário ou senha incorretos.")
 
 def logout_user():
     st.session_state.logged_in = False
@@ -113,16 +122,13 @@ def logout_user():
     st.session_state.editing_transaction = None 
     st.session_state.pending_delete_id = None
     st.session_state.last_main_menu_selection = None 
-    if "my_summary_month_select" in st.session_state:
-        del st.session_state.my_summary_month_select
-    if "couple_summary_month_select" in st.session_state:
-        del st.session_state.couple_summary_month_select
+    if "my_summary_month_select" in st.session_state: del st.session_state.my_summary_month_select
+    if "couple_summary_month_select" in st.session_state: del st.session_state.couple_summary_month_select
     st.rerun()
 
 # --- Funções CRUD para Transações com Firestore ---
 def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_type, category, description, amount, payment_status=None):
     if not db: st.error("Conexão com o banco de dados falhou ao salvar."); return
-
     timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
     doc_ref = db.collection("transactions").document() 
     data_to_save = {
@@ -133,7 +139,6 @@ def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_t
     }
     if transaction_type == "Despesa":
         data_to_save["status_pagamento"] = payment_status if payment_status else "Pendente"
-    
     doc_ref.set(data_to_save)
 
 def add_transaction(user, date_obj, transaction_type, category, description, amount, is_recurring, num_installments, payment_status=None):
@@ -151,10 +156,8 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
                 day_of_installment = min(date_obj.day, calendar.monthrange(year_of_installment, month_of_installment)[1])
                 current_installment_date = datetime.date(year_of_installment, month_of_installment, day_of_installment)
                 installment_description = f"{original_description} (Parcela {i+1}/{num_installments})" if original_description else f"Parcela {i+1}/{num_installments} de {category}"
-                
                 current_payment_status_for_installment = payment_status if i == 0 and transaction_type == "Despesa" else "Pendente"
                 if transaction_type != "Despesa": current_payment_status_for_installment = None
-
                 _save_single_transaction_to_firestore_internal(
                     user, current_installment_date, transaction_type, category, 
                     installment_description, amount_per_installment, current_payment_status_for_installment
@@ -164,7 +167,6 @@ def add_transaction(user, date_obj, transaction_type, category, description, amo
             final_description = description 
             if is_recurring and num_installments == 1: 
                  final_description = f"{description} (Parcela 1/1)" if description else f"Parcela 1/1 de {category}"
-            
             current_payment_status = payment_status if transaction_type == "Despesa" else None
             _save_single_transaction_to_firestore_internal(
                 user, date_obj, transaction_type, category, final_description, amount, current_payment_status
@@ -184,7 +186,7 @@ def get_transactions_df():
             if 'date' in data and isinstance(data['date'], datetime.datetime):
                 data['date'] = data['date'].date() 
             if data.get('type') == "Despesa" and 'status_pagamento' not in data:
-                data['status_pagamento'] = "Pendente" # Default para dados antigos
+                data['status_pagamento'] = "Pendente"
             transactions_list.append(data)
         
         df = pd.DataFrame(transactions_list)
@@ -226,7 +228,6 @@ def update_payment_status_in_firestore(transaction_id, new_status):
         st.success(f"Status da despesa atualizado para {new_status}!")
     except Exception as e: st.error(f"Erro ao atualizar status do pagamento: {e}")
     st.rerun()
-
 
 # --- Funções de Interface para Edição/Exclusão ---
 def display_edit_transaction_form():
@@ -285,7 +286,7 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
 
     st.markdown(
         """<style>.transaction-row > div { display: flex; align-items: center; }
-           .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; margin-top: 5px !important; }
+           .transaction-row .stButton button { padding: 0.25rem 0.5rem; line-height: 1.2; font-size: 0.9rem; margin-top: 5px !important; width: 100%;}
            .status-text { font-size: 0.85rem; color: #555; margin-bottom: -2px; display: block; text-align: center;}
         </style>""", 
         unsafe_allow_html=True
@@ -316,7 +317,7 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
 
         status_col_content = cols[5]
         if is_expense and can_edit_delete:
-            status_col_content.markdown(f"<span class='status-text'>Status: {payment_status}</span>", unsafe_allow_html=True)
+            status_col_content.markdown(f"<div class='status-text'>Status: {payment_status}</div>", unsafe_allow_html=True)
             button_label = "Pagar" if payment_status == "Pendente" else "Pendente"
             new_status_on_click = "Pago" if payment_status == "Pendente" else "Pendente"
             if status_col_content.button(button_label, key=f"{list_id_prefix}_status_{trans_id}", help=f"Clique para marcar como {new_status_on_click}"):
@@ -411,10 +412,10 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
 
         st.subheader(f"{title_prefix}Resumo de {format_month_year_for_display(selected_month_internal)}")
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Receitas", f"R$ {receitas:,.2f}")
-        col2.metric("Despesas", f"R$ {despesas_total:,.2f}") 
-        col3.metric("Investimentos", f"R$ {investimentos_periodo:,.2f}") 
-        col4.metric("Saldo Final", f"R$ {saldo:,.2f}", delta_color=("inverse" if saldo < 0 else "normal"))
+        col1.metric("Receitas", format_brazilian_currency(receitas))
+        col2.metric("Despesas", format_brazilian_currency(despesas_total)) 
+        col3.metric("Investimentos", format_brazilian_currency(investimentos_periodo)) 
+        col4.metric("Saldo Final", format_brazilian_currency(saldo), delta_color=("inverse" if saldo < 0 else "normal"))
         st.markdown("---")
         st.subheader(f"{title_prefix}Composição Receita vs. Despesa ({format_month_year_for_display(selected_month_internal)})")
         chart_values, chart_names, chart_colors, chart_title = [], [], [], "Situação Financeira do Mês"
