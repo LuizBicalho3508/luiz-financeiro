@@ -8,6 +8,11 @@ import json
 import calendar 
 import locale # Para formatação de moeda
 
+# --- Configuração da Página ---
+# Deve ser o primeiro comando Streamlit, exceto por comentários e imports.
+st.set_page_config(layout="wide")
+
+
 # --- Configurações Iniciais e Autenticação (Usuários) ---
 USERS = {"Luiz": "1517", "Iasmin": "1516"}
 
@@ -29,8 +34,10 @@ except locale.Error:
         LOCALE_SET_SUCCESS = True
     except locale.Error:
         if 'initial_locale_warning_shown' not in st.session_state: # Guarded warning
-            st.warning("Locale 'pt_BR' não pôde ser configurado. Usando formatação de moeda manual.")
-            st.session_state.initial_locale_warning_shown = True
+            # Este warning pode não ser visível se st.set_page_config já foi chamado.
+            # O ideal é que o print funcione para logs do servidor.
+            print("Aviso: Locale 'pt_BR' não pôde ser configurado. Usando formatação de moeda manual.")
+            st.session_state.initial_locale_warning_shown = True # Para evitar warnings repetidos na UI se st.warning for usado depois
         LOCALE_SET_SUCCESS = False # Explicitamente define como False se ambas as tentativas falharem
 
 
@@ -110,35 +117,24 @@ def format_brazilian_currency(value):
     if LOCALE_SET_SUCCESS:
         try:
             return locale.currency(value, grouping=True, symbol='R$ ') 
-        except (locale.Error, ValueError):
+        except (locale.Error, ValueError): # Captura erros específicos do locale
             LOCALE_SET_SUCCESS = False 
-            if 'pt_BR_runtime_warning_shown' not in st.session_state:
-                st.warning("Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
+            if 'pt_BR_runtime_warning_shown' not in st.session_state: # Evita warnings repetidos
+                # st.warning("Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
+                print("Aviso: Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
                 st.session_state.pt_BR_runtime_warning_shown = True
-            # Fall through to manual formatting
+            # Fall through to manual formatting se locale.currency falhar
 
-    # Fallback manual
+    # Fallback manual robusto
     try:
-        val_float = float(value) # Garante que é float
-        s = f"{val_float:.2f}"
-        parts = s.split('.')
-        integer_part = parts[0]
-        decimal_part = parts[1] if len(parts) > 1 else "00"
-        
-        sign = ""
-        if integer_part.startswith('-'):
-            sign = "-"
-            integer_part = integer_part[1:]
-
-        integer_part_with_thousands = ""
-        for i, digit in enumerate(reversed(integer_part)):
-            if i != 0 and i % 3 == 0:
-                integer_part_with_thousands = "." + integer_part_with_thousands
-            integer_part_with_thousands = digit + integer_part_with_thousands
-        
-        return f"R$ {sign}{integer_part_with_thousands},{decimal_part}" # Adicionado espaço após R$
+        val_float = float(value) 
+        # Formata com duas casas decimais, usando vírgula como separador decimal
+        # e ponto como separador de milhar.
+        formatted_string = f"{val_float:_.2f}".replace('.', ',').replace('_', '.')
+        return f"R$ {formatted_string}"
     except Exception: 
-        return f"R$ {value:.2f}" # Fallback mais simples
+        # Fallback ainda mais simples se a formatação acima falhar
+        return f"R$ {value:.2f}"
 
 
 # --- Funções de Autenticação ---
