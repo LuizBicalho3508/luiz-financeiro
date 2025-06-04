@@ -19,13 +19,17 @@ PORTUGUESE_MONTHS = [
 PAYMENT_STATUS_OPTIONS = ["Pendente", "Pago"] # Opções de status
 
 # Tenta definir o locale para Português do Brasil para formatação de moeda
+LOCALE_SET_SUCCESS = False
 try:
     locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
+    LOCALE_SET_SUCCESS = True
 except locale.Error:
     try:
         locale.setlocale(locale.LC_ALL, 'Portuguese_Brazil.1252') # Windows
+        LOCALE_SET_SUCCESS = True
     except locale.Error:
-        st.warning("Locale 'pt_BR.UTF-8' ou 'Portuguese_Brazil.1252' não encontrado. A formatação de moeda pode não ser a ideal.")
+        # Apenas um aviso, o fallback na função de formatação será usado
+        print("Aviso: Locale 'pt_BR.UTF-8' ou 'Portuguese_Brazil.1252' não encontrado. Usando formatação de moeda manual.")
 
 
 # --- Inicialização do Firebase ---
@@ -38,7 +42,7 @@ def initialize_firebase():
             if not firebase_creds_json_str:
                 st.error("Credenciais Firebase (FIREBASE_SERVICE_ACCOUNT_JSON) não encontradas nos Streamlit Secrets.")
                 st.info("Por favor, adicione suas credenciais Firebase JSON como um segredo chamado 'FIREBASE_SERVICE_ACCOUNT_JSON' nas configurações do seu app Streamlit Cloud.")
-                st.stop()
+                st.stop() # Para a execução se as credenciais não forem encontradas
                 return None
             
             firebase_creds_dict = json.loads(firebase_creds_json_str)
@@ -47,7 +51,7 @@ def initialize_firebase():
         except Exception as e:
             st.error(f"Erro ao inicializar o Firebase: {e}")
             st.info("Verifique se as credenciais Firebase JSON estão corretas e no formato esperado.")
-            st.stop()
+            st.stop() # Para a execução em caso de erro
             return None
     
     db_client = firestore.client()
@@ -100,11 +104,38 @@ def parse_display_month_year(display_month_year_str): # "Nome do Mês de YYYY"
 
 def format_brazilian_currency(value):
     """Formata um valor numérico como moeda brasileira (R$)."""
+    global LOCALE_SET_SUCCESS # Acessa a variável global
+    if LOCALE_SET_SUCCESS:
+        try:
+            # Tenta usar a formatação de locale se pt_BR foi definido com sucesso
+            return locale.currency(value, grouping=True, symbol='R$ ') # Adiciona espaço após R$
+        except (locale.Error, ValueError):
+            # Se locale.currency falhar mesmo após LOCALE_SET_SUCCESS ser True, usa o fallback.
+            # Isso pode acontecer se o locale foi definido, mas algo ainda está errado.
+            LOCALE_SET_SUCCESS = False # Marca que o locale não está funcionando para evitar tentativas futuras.
+            if 'pt_BR_warning_shown' not in st.session_state:
+                st.warning("Falha ao usar formatação de moeda do locale. Usando formatação manual.")
+                st.session_state.pt_BR_warning_shown = True
+
+    # Fallback manual se LOCALE_SET_SUCCESS for False ou se locale.currency() falhar
     try:
-        # Usa a formatação de locale se pt_BR foi definido com sucesso
-        return locale.currency(value, grouping=True, symbol='R$')
-    except NameError: # Fallback se locale não estiver definido ou der erro
-        return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        # Formatação manual para R$ 1.234.567,89
+        # Converte para string com 2 casas decimais, usando . como separador decimal temporário
+        s = f"{value:.2f}"
+        parts = s.split('.')
+        integer_part = parts[0]
+        decimal_part = parts[1] if len(parts) > 1 else "00"
+        
+        # Adiciona separador de milhar
+        integer_part_with_thousands = ""
+        for i, digit in enumerate(reversed(integer_part)):
+            if i != 0 and i % 3 == 0:
+                integer_part_with_thousands = "." + integer_part_with_thousands
+            integer_part_with_thousands = digit + integer_part_with_thousands
+        
+        return f"R$ {integer_part_with_thousands},{decimal_part}"
+    except Exception: # Fallback ainda mais genérico se a formatação manual falhar
+        return f"R$ {value:.2f}" # Simples formatação com duas casas decimais
 
 
 # --- Funções de Autenticação ---
@@ -313,12 +344,12 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
         cols[1].write(row['type'])
         cols[2].write(row['category'])
         cols[3].write(row.get('description', '')[:25] + '...' if len(row.get('description', '')) > 25 else row.get('description', '')) 
-        cols[4].write(f"R$ {row['amount']:.2f}")
+        cols[4].write(format_brazilian_currency(row['amount'])) # Formata valor aqui também
 
         status_col_content = cols[5]
         if is_expense and can_edit_delete:
             status_col_content.markdown(f"<div class='status-text'>Status: {payment_status}</div>", unsafe_allow_html=True)
-            button_label = "Pagar" if payment_status == "Pendente" else "Pendente"
+            button_label = "Pagar" if payment_status == "Pendente" else "Pendente" # Texto do botão indica a ação
             new_status_on_click = "Pago" if payment_status == "Pendente" else "Pendente"
             if status_col_content.button(button_label, key=f"{list_id_prefix}_status_{trans_id}", help=f"Clique para marcar como {new_status_on_click}"):
                 update_payment_status_in_firestore(trans_id, new_status_on_click)
