@@ -34,18 +34,16 @@ except locale.Error:
         LOCALE_SET_SUCCESS = True
     except locale.Error:
         if 'initial_locale_warning_shown' not in st.session_state: # Guarded warning
-            # Este warning pode não ser visível se st.set_page_config já foi chamado.
-            # O ideal é que o print funcione para logs do servidor.
             print("Aviso: Locale 'pt_BR' não pôde ser configurado. Usando formatação de moeda manual.")
-            st.session_state.initial_locale_warning_shown = True # Para evitar warnings repetidos na UI se st.warning for usado depois
-        LOCALE_SET_SUCCESS = False # Explicitamente define como False se ambas as tentativas falharem
+            st.session_state.initial_locale_warning_shown = True 
+        LOCALE_SET_SUCCESS = False
 
 
 # --- Inicialização do Firebase ---
-@st.cache_resource # Cache para evitar reinicializações desnecessárias
+@st.cache_resource 
 def initialize_firebase():
     """Inicializa a conexão com o Firebase usando as credenciais dos secrets."""
-    if not firebase_admin._apps: # Verifica se já foi inicializado
+    if not firebase_admin._apps: 
         try:
             firebase_creds_json_str = st.secrets.get("FIREBASE_SERVICE_ACCOUNT_JSON")
             if not firebase_creds_json_str:
@@ -117,23 +115,16 @@ def format_brazilian_currency(value):
     if LOCALE_SET_SUCCESS:
         try:
             return locale.currency(value, grouping=True, symbol='R$ ') 
-        except (locale.Error, ValueError): # Captura erros específicos do locale
+        except (locale.Error, ValueError): 
             LOCALE_SET_SUCCESS = False 
-            if 'pt_BR_runtime_warning_shown' not in st.session_state: # Evita warnings repetidos
-                # st.warning("Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
+            if 'pt_BR_runtime_warning_shown' not in st.session_state: 
                 print("Aviso: Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
                 st.session_state.pt_BR_runtime_warning_shown = True
-            # Fall through to manual formatting se locale.currency falhar
-
-    # Fallback manual robusto
     try:
         val_float = float(value) 
-        # Formata com duas casas decimais, usando vírgula como separador decimal
-        # e ponto como separador de milhar.
         formatted_string = f"{val_float:_.2f}".replace('.', ',').replace('_', '.')
         return f"R$ {formatted_string}"
     except Exception: 
-        # Fallback ainda mais simples se a formatação acima falhar
         return f"R$ {value:.2f}"
 
 
@@ -493,9 +484,15 @@ def display_summary_charts_and_data(df_period, df_full_history_for_user_or_coupl
                     if 'Receita' not in monthly_summary.columns: monthly_summary['Receita'] = 0
                     if 'Despesa' not in monthly_summary.columns: monthly_summary['Despesa'] = 0
                     monthly_summary = monthly_summary.sort_values(by='month_year') 
+                    
+                    # Definindo cores para o gráfico de linha
+                    color_map = {"Receita": "blue", "Despesa": "red"}
+
                     fig_line_history = px.line(monthly_summary, x='month_year', y=['Receita', 'Despesa'],
                                                title='Receitas vs. Despesas Mensais',
-                                               labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'}, markers=True)
+                                               labels={'month_year': 'Mês/Ano', 'value': 'Valor (R$)', 'variable': 'Tipo'}, 
+                                               markers=True,
+                                               color_discrete_map=color_map) # Aplicando as cores
                     fig_line_history.update_layout(yaxis_title='Valor (R$)', xaxis_title='Mês/Ano')
                     st.plotly_chart(fig_line_history, use_container_width=True)
                 else: st.info(f"{title_prefix}Não há dados de Receita ou Despesa no período de 12 meses até {format_month_year_for_display(selected_month_internal)}.")
