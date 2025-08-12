@@ -131,9 +131,6 @@ def logout_user():
     st.rerun()
 
 # --- Funções CRUD (Geral e Moto) ---
-# ... (Funções CRUD para transações gerais permanecem as mesmas)
-# ... (Funções CRUD para transações de moto serão adicionadas abaixo)
-# --- Funções CRUD para Transações com Firestore ---
 def _save_single_transaction_to_firestore_internal(user, date_obj, transaction_type, category, description, amount, payment_status=None):
     if not db: st.error("Conexão com o banco de dados falhou ao salvar."); return
     timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
@@ -270,9 +267,16 @@ def get_moto_transactions_df():
                 data['date'] = data['date'].date()
             transactions_list.append(data)
         
-        df = pd.DataFrame(transactions_list)
-        if df.empty:
+        if not transactions_list:
              return pd.DataFrame(columns=["id", "user", "date", "expense_type", "description", "amount", "mileage", "liters"])
+
+        df = pd.DataFrame(transactions_list)
+        
+        # **CORREÇÃO APLICADA AQUI**
+        # Garante que a coluna 'liters' existe, preenchendo com NA se estiver ausente (para dados antigos)
+        if 'liters' not in df.columns:
+            df['liters'] = pd.NA
+
         if 'date' in df.columns: df['date'] = pd.to_datetime(df['date'])
         if 'amount' in df.columns: df['amount'] = pd.to_numeric(df['amount'])
         if 'mileage' in df.columns: df['mileage'] = pd.to_numeric(df['mileage'])
