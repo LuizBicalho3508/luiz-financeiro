@@ -100,7 +100,7 @@ def format_brazilian_currency(value):
         except (locale.Error, ValueError): 
             LOCALE_SET_SUCCESS = False 
             if 'pt_BR_runtime_warning_shown' not in st.session_state: 
-                print("Aviso: Falha ao usar formatação de moeda do locale. Usando formatação manual.")
+                print("Aviso: Falha ao usar formatação de moeda do locale em tempo de execução. Usando formatação manual.")
                 st.session_state.pt_BR_runtime_warning_shown = True
     try:
         val_float = float(value) 
@@ -752,28 +752,30 @@ def page_moto_expenses():
     
     df_moto = get_moto_transactions_df()
     
-    # Resumo de Custos da Moto
     if not df_moto.empty:
         total_cost = df_moto['amount'].sum()
         
-        # Custo por KM (se houver dados de quilometragem)
         df_with_mileage = df_moto.dropna(subset=['mileage'])
         cost_per_km = 0
         if not df_with_mileage.empty and df_with_mileage['mileage'].max() > 0:
-            total_cost_with_mileage = df_with_mileage['amount'].sum()
+            # Filtra apenas para despesas de combustível com quilometragem
+            df_fuel_with_mileage = df_with_mileage[df_with_mileage['expense_type'] == 'Combustível']
+            total_fuel_cost = df_fuel_with_mileage['amount'].sum()
+            
+            # A distância percorrida é calculada com base em todas as entradas de KM
             max_km = df_with_mileage['mileage'].max()
             min_km = df_with_mileage['mileage'].min()
-            if (max_km - min_km) > 0:
-                cost_per_km = total_cost_with_mileage / (max_km - min_km)
+            
+            if (max_km - min_km) > 0 and total_fuel_cost > 0:
+                cost_per_km = total_fuel_cost / (max_km - min_km)
 
         col1, col2 = st.columns(2)
         col1.metric("Custo Total com a Moto", format_brazilian_currency(total_cost))
         if cost_per_km > 0:
-            col2.metric("Custo Médio por KM", f"{format_brazilian_currency(cost_per_km)} / KM")
+            col2.metric("Custo Médio de Combustível por KM", f"{format_brazilian_currency(cost_per_km)} / KM")
         else:
-            col2.info("Adicione lançamentos com quilometragem para calcular o custo por KM.")
+            col2.info("Adicione lançamentos de combustível com quilometragem para calcular o custo por KM.")
         
-        # Gráfico de Custos por Tipo
         st.subheader("Gastos por Tipo")
         costs_by_type = df_moto.groupby('expense_type')['amount'].sum().reset_index()
         fig_moto_costs = px.bar(costs_by_type, x='expense_type', y='amount', 
@@ -783,7 +785,6 @@ def page_moto_expenses():
         fig_moto_costs.update_traces(texttemplate='%{y:,.2f}', textposition='outside')
         st.plotly_chart(fig_moto_costs, use_container_width=True)
         st.markdown("---")
-
 
     render_moto_transaction_rows(df_moto)
 
@@ -795,7 +796,7 @@ def main_app():
         "🏠 Lançar Transação": page_log_transaction,
         "📊 Meu Resumo": page_my_summary,
         "💑 Resumo do Casal": page_couple_summary,
-        "🏍️ Despesas da Moto": page_moto_expenses # Nova página adicionada ao menu
+        "🏍️ Despesas da Moto": page_moto_expenses
     }
     selection = st.sidebar.radio("Menu", list(menu_options.keys()), key="main_menu_selection")
     st.sidebar.markdown("---")
