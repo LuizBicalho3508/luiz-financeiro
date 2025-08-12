@@ -70,6 +70,8 @@ def initialize_app_session_state():
     if 'pending_delete_moto_id' not in st.session_state: st.session_state.pending_delete_moto_id = None
     if 'transaction_mode_selection_key' not in st.session_state: st.session_state.transaction_mode_selection_key = "Único"
     if 'last_main_menu_selection' not in st.session_state: st.session_state.last_main_menu_selection = None
+    if 'moto_expense_type_key' not in st.session_state: st.session_state.moto_expense_type_key = MOTO_EXPENSE_TYPES[0]
+
 
 initialize_app_session_state()
 
@@ -235,7 +237,7 @@ def update_payment_status_in_firestore(transaction_id, new_status):
     st.rerun()
 
 # --- Funções CRUD para Despesas da Moto ---
-def add_moto_transaction(user, date_obj, expense_type, description, amount, mileage):
+def add_moto_transaction(user, date_obj, expense_type, description, amount, mileage, liters=None):
     if not db: st.error("Conexão com o banco de dados não estabelecida."); return
     if not expense_type or not description or amount <= 0:
         st.warning("Preencha todos os campos obrigatórios com valores válidos.")
@@ -243,12 +245,16 @@ def add_moto_transaction(user, date_obj, expense_type, description, amount, mile
     try:
         timestamp_obj = datetime.datetime.combine(date_obj, datetime.datetime.min.time())
         doc_ref = db.collection("moto_transactions").document()
-        doc_ref.set({
+        data_to_save = {
             "user": user, "date": timestamp_obj, "expense_type": expense_type,
             "description": description.strip(), "amount": float(amount),
             "mileage": int(mileage) if mileage else None,
             "created_at": firestore.SERVER_TIMESTAMP
-        })
+        }
+        if expense_type == "Combustível" and liters is not None and liters > 0:
+            data_to_save["liters"] = float(liters)
+        
+        doc_ref.set(data_to_save)
         st.success("Despesa da moto adicionada com sucesso!")
     except Exception as e: st.error(f"Erro ao adicionar despesa da moto: {e}")
 
@@ -266,10 +272,11 @@ def get_moto_transactions_df():
         
         df = pd.DataFrame(transactions_list)
         if df.empty:
-             return pd.DataFrame(columns=["id", "user", "date", "expense_type", "description", "amount", "mileage"])
+             return pd.DataFrame(columns=["id", "user", "date", "expense_type", "description", "amount", "mileage", "liters"])
         if 'date' in df.columns: df['date'] = pd.to_datetime(df['date'])
         if 'amount' in df.columns: df['amount'] = pd.to_numeric(df['amount'])
         if 'mileage' in df.columns: df['mileage'] = pd.to_numeric(df['mileage'])
+        if 'liters' in df.columns: df['liters'] = pd.to_numeric(df['liters'])
         return df
     except Exception as e: st.error(f"Erro ao buscar despesas da moto: {e}"); return pd.DataFrame()
 
@@ -296,9 +303,6 @@ def update_moto_transaction_in_firestore(transaction_id, data_to_update):
 
 
 # --- Funções de Interface (Geral, Moto, Edição) ---
-# ... (Funções de interface para transações gerais permanecem as mesmas)
-# ... (Funções de interface para despesas da moto serão adicionadas abaixo)
-# --- Funções de Interface para Edição/Exclusão ---
 def display_edit_transaction_form():
     if not st.session_state.get('editing_transaction'): return
 
@@ -410,7 +414,7 @@ def render_transaction_rows(df_transactions, list_id_prefix=""):
             else:
                 if cols[7].button("🗑️", key=f"{list_id_prefix}_delete_{trans_id}", help="Excluir"):
                     st.session_state.pending_delete_id = trans_id
-                    st.session_state.editing_transaction = None; st.rerun()
+                    st.session_state.editing_moto_transaction = None; st.rerun()
         else:
             cols[6].write(""); cols[7].write("") 
     st.markdown("---")
@@ -441,6 +445,10 @@ def display_edit_moto_transaction_form():
                                         min_value=0.01, format="%.2f", step=0.01, key=f"edit_moto_amount_{transaction_id}")
         edited_mileage = st.number_input("Quilometragem (KM)", value=int(current_data.get('mileage', 0) or 0),
                                          min_value=0, step=100, key=f"edit_moto_mileage_{transaction_id}")
+        
+        edited_liters = current_data.get('liters', 0.0)
+        if edited_type == "Combustível":
+            edited_liters = st.number_input("Litros Abastecidos", value=float(edited_liters or 0.0), min_value=0.0, format="%.2f", step=0.01, key=f"edit_moto_liters_{transaction_id}")
 
         cols = st.columns(2)
         if cols[0].form_submit_button("Salvar Alterações"):
@@ -451,6 +459,11 @@ def display_edit_moto_transaction_form():
                     "expense_type": edited_type, "description": edited_description.strip(),
                     "amount": float(edited_amount), "mileage": int(edited_mileage) if edited_mileage > 0 else None
                 }
+                if edited_type == "Combustível" and edited_liters > 0:
+                    data_to_update["liters"] = float(edited_liters)
+                elif "liters" in data_to_update:
+                    del data_to_update["liters"]
+                
                 update_moto_transaction_in_firestore(transaction_id, data_to_update)
         
         if cols[1].form_submit_button("Cancelar Edição", type="secondary"):
@@ -465,8 +478,8 @@ def render_moto_transaction_rows(df_moto_transactions):
         unsafe_allow_html=True
     )
     
-    header_cols = st.columns((2, 2, 4, 2, 2, 1, 1)) 
-    fields = ['Data', 'Tipo', 'Descrição', 'Valor (R$)', 'KM', 'Editar', 'Excluir']
+    header_cols = st.columns((2, 3, 4, 2, 2, 2, 1, 1)) 
+    fields = ['Data', 'Tipo', 'Descrição', 'Valor (R$)', 'KM', 'Litros', 'Editar', 'Excluir']
     for col, field_name in zip(header_cols, fields):
         col.markdown(f"**{field_name}**")
 
@@ -478,31 +491,32 @@ def render_moto_transaction_rows(df_moto_transactions):
         
         can_edit_delete = row.get('user') == st.session_state.user
 
-        cols = st.columns((2, 2, 4, 2, 2, 1, 1), gap="small") 
+        cols = st.columns((2, 3, 4, 2, 2, 2, 1, 1), gap="small") 
         
         cols[0].write(row['date'].strftime('%d/%m/%Y') if pd.notnull(row['date']) else 'N/A')
         cols[1].write(row['expense_type'])
         cols[2].write(row.get('description', ''))
         cols[3].write(format_brazilian_currency(row['amount'])) 
         cols[4].write(f"{row['mileage']:,}".replace(",", ".") if pd.notnull(row['mileage']) and row['mileage'] > 0 else "-")
+        cols[5].write(f"{row['liters']:.2f} L" if pd.notnull(row.get('liters')) and row.get('liters') > 0 else "-")
 
         if can_edit_delete:
-            if cols[5].button("✏️", key=f"moto_edit_{trans_id}", help="Editar"):
+            if cols[6].button("✏️", key=f"moto_edit_{trans_id}", help="Editar"):
                 st.session_state.editing_moto_transaction = {'id': trans_id, 'data': row_data_for_edit}
                 st.session_state.pending_delete_moto_id = None; st.rerun()
             
             if st.session_state.get('pending_delete_moto_id') == trans_id:
-                confirm_cols = cols[6].columns([1,1])
+                confirm_cols = cols[7].columns([1,1])
                 if confirm_cols[0].button("✅", key=f"moto_confirmdel_{trans_id}", help="Confirmar Exclusão"):
                     delete_moto_transaction_from_firestore(trans_id) 
                 if confirm_cols[1].button("❌", key=f"moto_canceldel_{trans_id}", help="Cancelar Exclusão"):
                     st.session_state.pending_delete_moto_id = None; st.rerun()
             else:
-                if cols[6].button("🗑️", key=f"moto_delete_{trans_id}", help="Excluir"):
+                if cols[7].button("🗑️", key=f"moto_delete_{trans_id}", help="Excluir"):
                     st.session_state.pending_delete_moto_id = trans_id
                     st.session_state.editing_moto_transaction = None; st.rerun()
         else:
-            cols[5].write(""); cols[6].write("") 
+            cols[6].write(""); cols[7].write("") 
     st.markdown("---")
 
 
@@ -725,14 +739,21 @@ def page_moto_expenses():
     display_edit_moto_transaction_form()
 
     st.subheader("Adicionar Novo Lançamento")
+    
+    # Seletor do tipo de despesa fora do formulário para UI dinâmica
+    moto_expense_type = st.selectbox("Tipo de Despesa", MOTO_EXPENSE_TYPES, key="moto_expense_type_key")
+
     with st.form("moto_transaction_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             moto_date = st.date_input("Data do Serviço", datetime.date.today(), key="moto_date")
-            moto_expense_type = st.selectbox("Tipo de Despesa", MOTO_EXPENSE_TYPES, key="moto_expense_type")
-        with col2:
             moto_amount = st.number_input("Valor (R$)", min_value=0.01, format="%.2f", step=0.01, key="moto_amount")
+        with col2:
             moto_mileage = st.number_input("Quilometragem (KM)", min_value=0, step=100, key="moto_mileage", help="Opcional: KM no momento do serviço")
+            moto_liters = 0.0
+            # Campo de litros aparece condicionalmente
+            if st.session_state.moto_expense_type_key == "Combustível":
+                moto_liters = st.number_input("Litros Abastecidos", min_value=0.0, format="%.2f", step=0.01, key="moto_liters")
 
         moto_description = st.text_area("Descrição (Ex: Troca de óleo, Pneu traseiro)", key="moto_desc")
         
@@ -741,10 +762,11 @@ def page_moto_expenses():
             add_moto_transaction(
                 st.session_state.user,
                 moto_date,
-                moto_expense_type,
+                st.session_state.moto_expense_type_key, # Usa o valor do seletor externo
                 moto_description,
                 moto_amount,
-                moto_mileage
+                moto_mileage,
+                moto_liters if st.session_state.moto_expense_type_key == "Combustível" else None
             )
 
     st.markdown("---")
@@ -757,25 +779,39 @@ def page_moto_expenses():
         
         df_with_mileage = df_moto.dropna(subset=['mileage'])
         cost_per_km = 0
-        if not df_with_mileage.empty and df_with_mileage['mileage'].max() > 0:
-            # Filtra apenas para despesas de combustível com quilometragem
-            df_fuel_with_mileage = df_with_mileage[df_with_mileage['expense_type'] == 'Combustível']
-            total_fuel_cost = df_fuel_with_mileage['amount'].sum()
+        km_per_liter = 0
+        
+        if not df_with_mileage.empty and df_with_mileage['mileage'].nunique() > 1:
+            # Filtra apenas para despesas de combustível com quilometragem e litros
+            df_fuel_for_calc = df_with_mileage[(df_with_mileage['expense_type'] == 'Combustível') & (df_with_mileage['liters'].notna()) & (df_with_mileage['liters'] > 0)]
+            total_fuel_cost = df_fuel_for_calc['amount'].sum()
+            total_liters = df_fuel_for_calc['liters'].sum()
             
             # A distância percorrida é calculada com base em todas as entradas de KM
             max_km = df_with_mileage['mileage'].max()
             min_km = df_with_mileage['mileage'].min()
+            distance_traveled = max_km - min_km
             
-            if (max_km - min_km) > 0 and total_fuel_cost > 0:
-                cost_per_km = total_fuel_cost / (max_km - min_km)
+            if distance_traveled > 0:
+                # Custo de combustível por KM
+                if total_fuel_cost > 0:
+                    cost_per_km = total_fuel_cost / distance_traveled
+                # Consumo em KM por Litro
+                if total_liters > 0:
+                    km_per_liter = distance_traveled / total_liters
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         col1.metric("Custo Total com a Moto", format_brazilian_currency(total_cost))
         if cost_per_km > 0:
-            col2.metric("Custo Médio de Combustível por KM", f"{format_brazilian_currency(cost_per_km)} / KM")
+            col2.metric("Custo Médio de Combustível", f"{format_brazilian_currency(cost_per_km)} / KM")
         else:
-            col2.info("Adicione lançamentos de combustível com quilometragem para calcular o custo por KM.")
+            col2.info("Adicione lançamentos de combustível com KM para calcular o custo/KM.")
         
+        if km_per_liter > 0:
+            col3.metric("Consumo Médio", f"{km_per_liter:.2f} KM / L")
+        else:
+            col3.info("Adicione lançamentos de combustível com KM e Litros para calcular o KM/L.")
+
         st.subheader("Gastos por Tipo")
         costs_by_type = df_moto.groupby('expense_type')['amount'].sum().reset_index()
         fig_moto_costs = px.bar(costs_by_type, x='expense_type', y='amount', 
